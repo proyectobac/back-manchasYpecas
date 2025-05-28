@@ -205,12 +205,14 @@ class Server {
     this.app.use(`${this.path}/roles`, require('../routes/rol/rolesRoutes'));
     this.app.use(`${this.path}/usuarios`, require('../routes/usuarios/usuariosRoutes'));
     this.app.use(`${this.path}/productos`, require('../routes/productos/productosRoutes'));
+    this.app.use(`${this.path}/imagenes`, require('../routes/productos/imagenesRoutes'));
     this.app.use(`${this.path}/proveedores`, require('../routes/proveedores/proveedoresRoutes'));
     this.app.use(`${this.path}/compras`, require('../routes/compras/comprasRoutes'));
     this.app.use(`${this.path}/empleados`, require('../routes/empleados/empleadosRoutes'));
     this.app.use(`${this.path}/ventas`, require('../routes/ventas/ventasRotes'));
     this.app.use(`${this.path}/pagos`, require('../routes/pagos/pagosRoutes')); 
-    this.app.use(`${this.path}/clientes`, require('../routes/clientes/clientesRoutes')); // Nueva ruta para clientes
+    this.app.use(`${this.path}/clientes`, require('../routes/clientes/clientesRoutes')); 
+    
   }
   handleErrors() {
     // Coloca el middleware de manejo de errores al final de la cadena de middlewares
