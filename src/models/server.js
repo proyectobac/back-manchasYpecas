@@ -96,6 +96,7 @@ class Server {
         { nombre_permiso: 'Tienda', ruta: '/tienda' },
         { nombre_permiso: 'Configuracion', ruta: '/usuarios' },
         { nombre_permiso: 'mi portal', ruta: '/permisoDasboardEmpleado' },
+        { nombre_permiso: 'resultadopago', ruta: '/resultado-pago/:referencia' },
       ];
       for (const permiso of permisosPorDefecto) {
         await Permiso.findOrCreate({
@@ -208,8 +209,8 @@ class Server {
     this.app.use(`${this.path}/compras`, require('../routes/compras/comprasRoutes'));
     this.app.use(`${this.path}/empleados`, require('../routes/empleados/empleadosRoutes'));
     this.app.use(`${this.path}/ventas`, require('../routes/ventas/ventasRotes'));
-    this.app.use(`${this.path}/pagos`, require('../routes/pagos/pagosRoutes')); // Ajusta la ruta al archivo de rutas
-
+    this.app.use(`${this.path}/pagos`, require('../routes/pagos/pagosRoutes')); 
+    this.app.use(`${this.path}/clientes`, require('../routes/clientes/clientesRoutes')); // Nueva ruta para clientes
   }
   handleErrors() {
     // Coloca el middleware de manejo de errores al final de la cadena de middlewares

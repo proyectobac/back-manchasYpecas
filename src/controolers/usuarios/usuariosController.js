@@ -1,6 +1,7 @@
 const Usuario = require('../../models/usuarios/usuariosModel');
 const Empleado = require('../../models/empleados/empleadosModel');
 const Permiso = require('../../models/permisos/permisosModels');
+const Clientes = require('../../models/clientes/clientesModel');
 const { response } = require('express');
 const Rol = require('../../models/rol/rolesModel');
 
