@@ -94,7 +94,10 @@ class Server {
         { nombre_permiso: 'Crear Compras', ruta: '/compras/crear' },
         { nombre_permiso: 'lista Compras', ruta: '/compras/lista' },
         { nombre_permiso: 'Tienda', ruta: '/tienda' },
-        { nombre_permiso: 'Configuracion', ruta: '/usuarios' },
+
+        { nombre_permiso: 'Configuracion', ruta: '/usuarios/lista' },
+        { nombre_permiso: 'roles', ruta: '/roles/lista' },
+
         { nombre_permiso: 'mi portal', ruta: '/permisoDasboardEmpleado' },
         { nombre_permiso: 'resultadopago', ruta: '/resultado-pago/:referencia' },
       ];
