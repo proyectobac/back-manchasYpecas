@@ -97,56 +97,41 @@ const getProducto = async (req, res = response) => {
 
 // === CREAR DATOS (CREATE) - Adaptado para Cloudinary ===
 const postProducto = async (req, res = response) => {
-    // Datos de texto del formulario
-    const { nombre, descripcion, categoria, estado } = req.body;
-    let cloudinaryResult = null;
-    let createdProductoItem = null;
-
+    const { nombre, descripcion, categoria, estado, precioVenta, stock } = req.body;
+    
     try {
-        // 1. Crear el producto SIN la URL de la foto inicialmente
-        createdProductoItem = await Producto.create({
+        let fotoUrl = null;
+
+        // Si hay un archivo subido, procesarlo con cloudinary
+        if (req.file) {
+            const result = await cloudinary.uploader.upload(req.file.path, {
+                folder: 'producto_images',
+                use_filename: true,
+                unique_filename: false,
+            });
+            fotoUrl = result.secure_url;
+            fs.unlinkSync(req.file.path); // Eliminar archivo temporal
+        }
+
+        // Crear el producto con todos los datos, incluyendo la URL de la foto
+        const createdProductoItem = await Producto.create({
             nombre,
             descripcion,
             categoria,
             estado: estado || 'Activo',
-            foto: null, // Empezamos con null
+            precioVenta: precioVenta || 0,
+            stock: stock || 0,
+            foto: fotoUrl
         });
 
-        // 2. Si se subió un archivo (Multer lo puso en req.file)
-        if (req.file) {
-            try {
-                // Subir a Cloudinary
-                cloudinaryResult = await uploadToCloudinary(req.file.path, 'producto_images'); // Usa la carpeta correcta
-
-                // Actualizar el producto recién creado con la URL de Cloudinary
-                createdProductoItem.foto = cloudinaryResult.secure_url;
-                await createdProductoItem.save(); // Guardar el cambio en la BD
-                console.log(`Producto ${createdProductoItem.id} actualizado con URL de Cloudinary.`);
-
-            } catch (cloudinaryError) {
-                // Si falla Cloudinary, el producto ya existe en la BD sin foto.
-                // Podrías decidir borrarlo o dejarlo. Por ahora, solo logueamos y respondemos.
-                console.error(`Fallo al subir/actualizar foto para producto ${createdProductoItem?.id}:`, cloudinaryError);
-                // NO relanzamos el error aquí para que la respuesta 201 (con producto sin foto) se envíe.
-                // O podrías responder con un error 500 específico.
-                // Alternativa: Borrar el producto creado si la subida falla.
-                // await createdProductoItem.destroy(); throw cloudinaryError;
-            }
-        }
-
-        // 3. Responder con éxito (con o sin URL de foto actualizada)
         res.status(201).json({
-            message: 'Producto creado exitosamente' + (cloudinaryResult ? ' con imagen.' : '.'),
-            producto: createdProductoItem, // Devuelve el producto (con o sin foto)
+            message: 'Producto creado exitosamente',
+            producto: createdProductoItem
         });
 
     } catch (error) {
-        // Error al crear en la BD (antes de intentar subir foto)
-        // Asegurarse de que si Multer creó un archivo temporal, se borre.
-        if (req.file && req.file.path && fs.existsSync(req.file.path)) {
-            fs.unlink(req.file.path, (err) => { if(err) console.error("Error borrando tmp tras fallo BD:", err); });
-        }
-
+        console.error('Error al crear el producto:', error);
+        
         if (error.name === 'SequelizeValidationError') {
             const errors = error.errors.map(e => ({ field: e.path, message: e.message }));
             return res.status(400).json({ message: 'Error de validación', errors });
@@ -154,7 +139,7 @@ const postProducto = async (req, res = response) => {
         if (error.name === 'SequelizeUniqueConstraintError') {
             return res.status(400).json({ message: 'Ya existe un producto con este nombre' });
         }
-        console.error('Error al crear el producto (BD):', error);
+        
         res.status(500).json({ message: 'Error interno al crear el producto' });
     }
 };

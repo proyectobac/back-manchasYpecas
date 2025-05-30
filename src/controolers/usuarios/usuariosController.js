@@ -245,17 +245,28 @@ const deleteUsuario = async (req, res = response) => {
   try {
     const usuario = await Usuario.findByPk(id);
 
-    if (usuario) {
-      await usuario.destroy();
-      res.json("Elemento de Usuario eliminado exitosamente");
-    } else {
-      res
-        .status(404)
-        .json({ error: ` P002 - E002 No se encontró un elemento de usuario con ID ${id}` });
+    if (!usuario) {
+      return res.status(404).json({ 
+        error: "No se encontró un elemento de usuario con ID " + id 
+      });
     }
+
+    await usuario.destroy();
+    res.json("Elemento de Usuario eliminado exitosamente");
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: " P002 - E002 Error al eliminar el elemento de usuario" });
+    
+    // Verificar si es un error de restricción de clave foránea
+    if (error.name === 'SequelizeForeignKeyConstraintError' || 
+        error.original?.code === 'ER_ROW_IS_REFERENCED_2') {
+      return res.status(400).json({ 
+        error: "No se puede eliminar el usuario porque tiene pagos asociados en el sistema. Por favor, revise los pagos relacionados antes de intentar eliminar el usuario."
+      });
+    }
+
+    res.status(500).json({ 
+      error: "Error al eliminar el elemento de usuario" 
+    });
   }
 };
 
