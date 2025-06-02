@@ -8,7 +8,7 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "description": "Este es un sistema integral de gestión para el negocio Manchas y Pecas, implementado como una aplicación web moderna utilizando tecnologías Node.js y Express. El sistema proporciona una solución completa para la gestión de productos, clientes, ventas, inventario y más.",
   "dependencies": {
     "axios": "^1.9.0",
     "bcrypt": "^5.1.1",
@@ -24,5 +24,14 @@
     "node-fetch": "^2.7.0",
     "nodemailer": "^6.10.0",
     "sequelize": "^6.37.7"
-  }
+  },
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/proyectobac/back-manchasYpecas.git"
+  },
+  "bugs": {
+    "url": "https://github.com/proyectobac/back-manchasYpecas/issues"
+  },
+  "homepage": "https://github.com/proyectobac/back-manchasYpecas#readme"
 }

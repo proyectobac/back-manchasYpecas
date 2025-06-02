@@ -94,7 +94,7 @@ class Server {
         { nombre_permiso: 'Crear Compras', ruta: '/compras/crear' },
         { nombre_permiso: 'lista Compras', ruta: '/compras/lista' },
         { nombre_permiso: 'Tienda', ruta: '/tienda' },
-
+        {nombre_permiso: 'Ventas', ruta: 'lista/ventas'},
         { nombre_permiso: 'Configuracion', ruta: '/usuarios/lista' },
         { nombre_permiso: 'roles', ruta: '/roles/lista' },
 
@@ -208,7 +208,6 @@ class Server {
     this.app.use(`${this.path}/roles`, require('../routes/rol/rolesRoutes'));
     this.app.use(`${this.path}/usuarios`, require('../routes/usuarios/usuariosRoutes'));
     this.app.use(`${this.path}/productos`, require('../routes/productos/productosRoutes'));
-    this.app.use(`${this.path}/imagenes`, require('../routes/productos/imagenesRoutes'));
     this.app.use(`${this.path}/proveedores`, require('../routes/proveedores/proveedoresRoutes'));
     this.app.use(`${this.path}/compras`, require('../routes/compras/comprasRoutes'));
     this.app.use(`${this.path}/empleados`, require('../routes/empleados/empleadosRoutes'));

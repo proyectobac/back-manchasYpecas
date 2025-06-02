@@ -18,7 +18,7 @@ module.exports = {
         unique: true, // Mantiene la unicidad
       },
       categoria: { // <-- NUEVO CAMPO
-        type: Sequelize.ENUM('SNACKS', 'HIGIENE', 'JUGUETERIA', 'ACCESORIOS'),
+        type: Sequelize.ENUM('SNACKS', 'HIGIENE', 'JUGUETERIA', 'ACCESORIOS', 'COMEDEROS'),
         allowNull: false, // Requerido
       },
       descripcion: {

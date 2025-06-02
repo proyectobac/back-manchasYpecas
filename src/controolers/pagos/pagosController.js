@@ -163,7 +163,7 @@ const iniciarPagoPSE = async (req = request, res = response) => {
             collect_shipping: false,
             currency: "COP",
             amount_in_cents: total_en_centavos,
-            redirect_url: `${WOMPI_CONFIG.REDIRECT_BASE_URL}/resultado-pago/${referencia}`,
+            redirect_url: `${process.env.PAYMENT_REDIRECT_BASE_URL}/resultado-pago/${referencia}`,
             customer_data: {
                 customer_references: [
                     {
@@ -178,6 +178,7 @@ const iniciarPagoPSE = async (req = request, res = response) => {
                     }
                 ]
             }
+
         };
 
         console.log('Payload para Wompi:', JSON.stringify(wompiPayload, null, 2));
@@ -237,6 +238,75 @@ const iniciarPagoPSE = async (req = request, res = response) => {
         });
     }
 };
+
+const manejarResultadoPago = async (req = request, res = response) => {
+    const { referencia } = req.params;
+
+    try {
+        const pago = await Pago.findOne({
+            where: { referencia_pago_interna: referencia }
+        });
+
+        if (!pago) {
+            return res.status(404).json({
+                success: false,
+                error: 'Pago no encontrado'
+            });
+        }
+
+        // Consultar el estado actual en Wompi si el pago está pendiente
+        if (pago.estado === 'PENDIENTE' && pago.id_transaccion_wompi) {
+            try {
+                const wompiResponse = await axios.get(
+                    `${WOMPI_CONFIG.getApiUrl()}/transactions/${pago.id_transaccion_wompi}`,
+                    { headers: { 'Authorization': `Bearer ${WOMPI_CONFIG.PRIVATE_KEY}` } }
+                );
+
+                if (wompiResponse.data?.data) {
+                    const estadosWompi = {
+                        APPROVED: 'APROBADO',
+                        DECLINED: 'RECHAZADO',
+                        VOIDED: 'ANULADO',
+                        ERROR: 'ERROR'
+                    };
+
+                    const nuevoEstado = estadosWompi[wompiResponse.data.data.status] || pago.estado;
+                    
+                    if (nuevoEstado !== pago.estado) {
+                        await pago.update({
+                            estado: nuevoEstado,
+                            datos_respuesta_agregador: wompiResponse.data.data
+                        });
+                    }
+                }
+            } catch (wompiError) {
+                console.error('Error consultando estado en Wompi:', wompiError);
+            }
+        }
+
+        // Devolver la información del pago
+        res.json({
+            success: true,
+            pago: {
+                referencia: pago.referencia_pago_interna,
+                estado: pago.estado,
+                monto: pago.monto,
+                metodo_pago: pago.metodo_pago,
+                fecha_creacion: pago.fecha_creacion,
+                datos_cliente: pago.datos_cliente,
+                items: pago.items
+            }
+        });
+
+    } catch (error) {
+        console.error('Error manejando resultado del pago:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Error al procesar el resultado del pago'
+        });
+    }
+};
+
 
 // Helper para validar formato de documento
 const validarFormatoDocumento = (tipo, documento) => {
@@ -470,6 +540,7 @@ const consultarEstadoPago = async (req = request, res = response) => {
 };
 
 module.exports = {
+    manejarResultadoPago,
     obtenerBancosPSE,
     iniciarPagoPSE,
     recibirWebhookWompi,

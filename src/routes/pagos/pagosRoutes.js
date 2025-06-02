@@ -11,7 +11,8 @@ router.get('/estado/:referencia', pagosController.consultarEstadoPago); // Mante
 
 // Rutas protegidas PSE (requieren autenticación)
 router.post('/pse/iniciar', verificarToken, pagosController.iniciarPagoPSE);
-
+// Añade esta ruta
+router.get('/resultado-pago/:referencia', pagosController.manejarResultadoPago);
 // Webhook de Wompi (debe ser público y verificar firma internamente)
 router.post('/webhook-wompi', pagosController.recibirWebhookWompi);
 
