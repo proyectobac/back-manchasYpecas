@@ -12,7 +12,7 @@ const WOMPI_CONFIG = {
     EVENTS_SECRET: process.env.WOMPI_EVENTS_SECRET,
 
     // URL base para redirecciones (frontend)
-    REDIRECT_BASE_URL: process.env.PAYMENT_REDIRECT_BASE_URL || 'http://localhost:3000',
+    REDIRECT_BASE_URL: process.env.PAYMENT_REDIRECT_BASE_URL || 'http://localhost:3001',
 
     // Determinar si estamos en modo sandbox o producción
     IS_SANDBOX: process.env.NODE_ENV !== 'production',

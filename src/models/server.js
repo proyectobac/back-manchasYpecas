@@ -42,7 +42,10 @@ class Server {
     const corsOptions = {
       origin: [
         'http://localhost:3000',
-        'http://localhost:3001',                     
+        'http://localhost:3001',       
+          'https://7c03-181-237-206-202.ngrok-free.app', // Agrega tu URL de ngrok del frontend
+        /\.ngrok-free\.app$/, // Esto permitirá cualquier subdominio de ngrok-free.app
+        process.env.FRONTEND_URL // Opcional: si tienes la URL del frontend en variables de entorno              
       ],
       credentials: true,                            // Permite cookies y credenciales
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Métodos permitidos

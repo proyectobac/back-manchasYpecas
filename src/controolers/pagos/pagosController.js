@@ -526,7 +526,9 @@ const consultarEstadoPago = async (req = request, res = response) => {
                 estado: pago.estado,
                 monto: pago.monto,
                 fecha_creacion: pago.fecha_creacion,
-                metodo_pago: pago.metodo_pago
+                metodo_pago: pago.metodo_pago,
+                datos_cliente: pago.datos_cliente,
+                items: pago.items
             }
         });
 
