@@ -1,31 +1,39 @@
-const { Sequelize } = require('sequelize')
-
-
+const { Sequelize } = require('sequelize');
+require('dotenv').config();
 
 const sequelize = new Sequelize({
     dialect: 'mysql',
-    host: 'localhost',
-    port:  3306, 
-    username: 'root',  
-    password:  'root',  
-    database: 'manchasYpecas',  
+    host: process.env.DB_HOST || 'localhost',
+    port: process.env.DB_PORT || 3306,
+    username: process.env.DB_USER || 'root',
+    password: process.env.DB_PASSWORD || 'root',
+    database: process.env.DB_NAME || 'manchasYpecas',
+    dialectOptions: {
+        ssl: process.env.NODE_ENV === 'production' ? {
+            require: true,
+            rejectUnauthorized: false
+        } : false
+    },
+    logging: false // Desactivar logs SQL en producción
 });
 
-sequelize
-    .authenticate()
-    .then(() => {
-        console.log("Conexión a la base de datos exitosa.");
-    })
-    .catch((err) => {
-        console.log("Error al conectar a la base de datos: ", err.message);
-    });
+// Función para intentar la conexión
+const testConnection = async () => {
+    try {
+        await sequelize.authenticate();
+        console.log("✅ Conexión a la base de datos exitosa.");
+        
+        // Solo sincronizar en desarrollo
+        if (process.env.NODE_ENV !== 'production') {
+            await sequelize.sync();
+            console.log("✅ Tablas sincronizadas con éxito.");
+        }
+    } catch (error) {
+        console.error("❌ Error en la base de datos:", error.message);
+    }
+};
 
-sequelize.sync()
-    .then(() => {
-        console.log("Tablas sincronizadas con éxito.");
-    })
-    .catch((err) => {
-        console.log("Error al sincronizar las tablas: ", err.message);
-    });
+// Ejecutar la prueba de conexión
+testConnection();
 
 module.exports = { sequelize };
