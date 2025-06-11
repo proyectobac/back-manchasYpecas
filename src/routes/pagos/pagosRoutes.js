@@ -1,22 +1,37 @@
 // routes/pagos/pagosRoutes.js
-const express = require('express');
-const pagosController = require('../../controolers/pagos/pagosController');
+const { Router } = require('express');
 const verificarToken = require('../../../middlewares/verificarToken');
-const router = express.Router();
+const {
+    obtenerBancosPSE,
+    iniciarPagoPSE,
+    consultarEstadoPagoPSE,
+    manejarResultadoPago,
+    recibirWebhookWompi,
+    consultarEstadoPago,
+    iniciarPagoEfectivo,
+    consultarPagoEfectivo,
+    confirmarPagoEfectivo,
+    verificarPagos
+} = require('../../controolers/pagos/pagosController');
 
-// Rutas públicas para PSE
-router.get('/bancos-pse', pagosController.obtenerBancosPSE);
-router.get('/pse/estado/:referencia', pagosController.consultarEstadoPagoPSE);
-router.get('/estado/:referencia', pagosController.consultarEstadoPago); // Mantener por compatibilidad
+const router = Router();
 
-// Rutas protegidas PSE (requieren autenticación)
-router.post('/pse/iniciar', verificarToken, pagosController.iniciarPagoPSE);
-// Añade esta ruta
-router.get('/resultado-pago/:referencia', pagosController.manejarResultadoPago);
-// Webhook de Wompi (debe ser público y verificar firma internamente)
-router.post('/webhook-wompi', pagosController.recibirWebhookWompi);
+// Rutas PSE existentes
+router.get('/bancos-pse', obtenerBancosPSE);
+router.post('/pse/iniciar', verificarToken, iniciarPagoPSE);
+router.get('/pse/estado/:referencia', consultarEstadoPagoPSE);
 
-// Puedes añadir más rutas para otros métodos de pago si los implementas
-// router.post('/iniciar-tarjeta', verificarToken, pagosController.iniciarPagoTarjeta);
+// Rutas para pagos en efectivo
+router.post('/efectivo/iniciar', verificarToken, iniciarPagoEfectivo);
+router.get('/efectivo/consultar/:codigo_pago', verificarToken, consultarPagoEfectivo);
+router.post('/efectivo/confirmar/:codigo_pago', verificarToken, confirmarPagoEfectivo);
+
+// Ruta de verificación
+router.get('/verificar', verificarToken, verificarPagos);
+
+// Rutas generales
+router.get('/estado/:referencia', consultarEstadoPago);
+router.get('/resultado/:referencia', manejarResultadoPago);
+router.post('/webhook', recibirWebhookWompi);
 
 module.exports = router;

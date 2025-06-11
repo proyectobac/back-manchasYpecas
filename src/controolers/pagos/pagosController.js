@@ -9,6 +9,7 @@ const Producto = require('../../models/productos/productosModel');   // Ajusta r
 const Usuario = require('../../models/usuarios/usuariosModel');     // Ajusta ruta
 const { sequelize } = require('../../../database/config');         // Ajusta ruta
 const { response, request } = require("express"); // Para tipado
+const PagoEfectivo = require('../../models/pagos/pagoEfectivoModel');
 
 // --- Variables de Entorno ---
 const WOMPI_API_URL = process.env.WOMPI_API_URL;
@@ -483,7 +484,7 @@ const recibirWebhookWompi = async (req = request, res = response) => {
                     id_producto: item.id_producto,
                     cantidad: item.cantidad,
                     precio_unitario: item.precio_unitario,
-                    subtotal: item.subtotal / 100 // Convertir de centavos a pesos
+                    subtotal_linea: item.subtotal / 100 // Convertir de centavos a pesos y usar el nombre correcto del campo
                 }, { transaction });
             }
 
@@ -541,11 +542,376 @@ const consultarEstadoPago = async (req = request, res = response) => {
     }
 };
 
+// Iniciar pago en efectivo
+const iniciarPagoEfectivo = async (req = request, res = response) => {
+    console.log('Token decodificado:', req.usuario);
+    const id_usuario = req.usuario.userId;
+    console.log('ID de usuario extraído:', id_usuario);
+    console.log('Datos recibidos:', req.body);
+    
+    const {
+        codigo_pago,
+        tipo_documento = 'CC',
+        documento,
+        nombre_completo,
+        email,
+        items,
+        telefono,
+        direccion_entrega,
+        ciudad,
+        notasAdicionales
+    } = req.body;
+
+    // Validar que items sea un array
+    if (!Array.isArray(items)) {
+        return res.status(400).json({
+            success: false,
+            error: 'El campo items debe ser un array de productos'
+        });
+    }
+
+    // Validar que el array de items no esté vacío
+    if (items.length === 0) {
+        return res.status(400).json({
+            success: false,
+            error: 'Debe incluir al menos un producto en la compra'
+        });
+    }
+
+    const transaction = await sequelize.transaction();
+
+    try {
+        // 1. Validar stock y calcular total
+        let total_en_centavos = 0;
+        const itemsValidados = [];
+
+        for (const item of items) {
+            // Validar que cada item tenga los campos necesarios
+            if (!item.id_producto || !item.cantidad || !item.precioVenta) {
+                await transaction.rollback();
+                return res.status(400).json({
+                    success: false,
+                    error: 'Cada item debe incluir id_producto, cantidad y precioVenta'
+                });
+            }
+
+            const producto = await Producto.findByPk(item.id_producto, { transaction });
+            if (!producto) {
+                await transaction.rollback();
+                return res.status(404).json({
+                    success: false,
+                    error: `Producto no encontrado: ${item.id_producto}`
+                });
+            }
+
+            if (producto.stock < item.cantidad) {
+                await transaction.rollback();
+                return res.status(400).json({
+                    success: false,
+                    error: `Stock insuficiente para ${producto.nombre}`
+                });
+            }
+            
+            const precioEnCentavos = Math.round(item.precioVenta * item.cantidad * 100);
+            total_en_centavos += precioEnCentavos;
+            
+            itemsValidados.push({
+                ...item,
+                nombre_producto: producto.nombre,
+                precio_unitario: item.precioVenta,
+                subtotal: precioEnCentavos
+            });
+        }
+
+        // 2. Crear registro de pago pendiente
+        const referencia = `EF-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+        const nuevoPago = await Pago.create({
+            id_usuario,
+            referencia_pago_interna: referencia,
+            metodo_pago: 'EFECTIVO',
+            monto: total_en_centavos,
+            moneda: 'COP',
+            estado: 'PENDIENTE',
+            datos_cliente: {
+                nombre: nombre_completo,
+                email,
+                telefono,
+                documento,
+                tipo_documento,
+                direccion: direccion_entrega,
+                ciudad,
+                notasAdicionales
+            },
+            items: itemsValidados
+        }, { transaction });
+
+        // 3. Crear registro de pago en efectivo
+        const fechaVencimiento = new Date();
+        fechaVencimiento.setHours(fechaVencimiento.getHours() + 48); // 48 horas de validez
+
+        const pagoEfectivo = await PagoEfectivo.create({
+            id_pago: nuevoPago.id_pago,
+            codigo_pago,
+            fecha_vencimiento: fechaVencimiento,
+            estado: 'PENDIENTE'
+        }, { transaction });
+
+        await transaction.commit();
+
+        return res.json({
+            success: true,
+            referencia: referencia,
+            codigo_pago: pagoEfectivo.codigo_pago,
+            fecha_vencimiento: pagoEfectivo.fecha_vencimiento,
+            monto: total_en_centavos / 100 // Convertir de centavos a pesos
+        });
+
+    } catch (error) {
+        await transaction.rollback();
+        console.error('Error al procesar pago en efectivo:', error);
+        return res.status(500).json({
+            success: false,
+            error: error.message || 'Error al procesar el pago en efectivo'
+        });
+    }
+};
+
+// Consultar estado de pago en efectivo
+const consultarPagoEfectivo = async (req = request, res = response) => {
+    const { codigo_pago } = req.params;
+    console.log('Consultando pago efectivo con código:', codigo_pago);
+
+    try {
+        const pagoEfectivo = await PagoEfectivo.findOne({
+            where: { codigo_pago },
+            include: [{
+                model: Pago,
+                required: true
+            }]
+        });
+
+        console.log('Resultado de la búsqueda:', pagoEfectivo);
+
+        if (!pagoEfectivo) {
+            return res.status(404).json({
+                success: false,
+                error: 'Código de pago no encontrado'
+            });
+        }
+
+        // Verificar si el pago está vencido
+        if (pagoEfectivo.estado === 'PENDIENTE' && new Date() > new Date(pagoEfectivo.fecha_vencimiento)) {
+            console.log('Pago vencido, actualizando estado...');
+            await pagoEfectivo.update({ estado: 'VENCIDO' });
+            if (pagoEfectivo.pago) {
+                await pagoEfectivo.pago.update({ estado: 'VENCIDO' });
+            }
+        }
+
+        // Verificar que tengamos acceso a los datos del pago
+        if (!pagoEfectivo.pago) {
+            console.error('No se encontró el Pago asociado al PagoEfectivo');
+            return res.status(500).json({
+                success: false,
+                error: 'Error al obtener los detalles del pago'
+            });
+        }
+
+        const respuesta = {
+            success: true,
+            estado: pagoEfectivo.estado,
+            fecha_vencimiento: pagoEfectivo.fecha_vencimiento,
+            fecha_pago: pagoEfectivo.fecha_pago,
+            monto: pagoEfectivo.pago.monto / 100, // Convertir de centavos a pesos
+            datos_cliente: pagoEfectivo.pago.datos_cliente,
+            items: pagoEfectivo.pago.items
+        };
+
+        console.log('Respuesta a enviar:', respuesta);
+        return res.json(respuesta);
+
+    } catch (error) {
+        console.error('Error detallado al consultar pago en efectivo:', error);
+        console.error('Stack trace:', error.stack);
+        return res.status(500).json({
+            success: false,
+            error: error.message || 'Error al consultar el estado del pago',
+            details: error.stack
+        });
+    }
+};
+
+// Confirmar pago en efectivo
+const confirmarPagoEfectivo = async (req = request, res = response) => {
+    const { codigo_pago } = req.params;
+    
+    const transaction = await sequelize.transaction();
+
+    try {
+        // 1. Buscar el pago en efectivo
+        const pagoEfectivo = await PagoEfectivo.findOne({
+            where: { codigo_pago },
+            include: [{
+                model: Pago,
+                required: true
+            }],
+            transaction
+        });
+
+        if (!pagoEfectivo) {
+            await transaction.rollback();
+            return res.status(404).json({
+                success: false,
+                error: 'Código de pago no encontrado'
+            });
+        }
+
+        if (pagoEfectivo.estado !== 'PENDIENTE') {
+            await transaction.rollback();
+            return res.status(400).json({
+                success: false,
+                error: `El pago no puede ser confirmado porque su estado es ${pagoEfectivo.estado}`
+            });
+        }
+
+        if (!pagoEfectivo.pago) {
+            await transaction.rollback();
+            return res.status(500).json({
+                success: false,
+                error: 'Error: No se encontró el pago asociado'
+            });
+        }
+
+        // 2. Crear la venta
+        const venta = await Venta.create({
+            id_usuario: pagoEfectivo.pago.id_usuario,
+            fecha_venta: new Date(),
+            total_venta: pagoEfectivo.pago.monto / 100, // Convertir de centavos a pesos
+            estado: 'COMPLETADA',
+            metodo_pago: 'EFECTIVO',
+            referencia_pago: pagoEfectivo.codigo_pago,
+            // Agregamos la información del cliente
+            nombre_cliente: pagoEfectivo.pago.datos_cliente.nombre,
+            telefono_cliente: pagoEfectivo.pago.datos_cliente.telefono,
+            direccion_cliente: pagoEfectivo.pago.datos_cliente.direccion,
+            ciudad_cliente: pagoEfectivo.pago.datos_cliente.ciudad
+        }, { transaction });
+
+        // 3. Crear los detalles de la venta y actualizar stock
+        for (const item of pagoEfectivo.pago.items) {
+            const producto = await Producto.findByPk(item.id_producto, { transaction });
+            if (!producto) {
+                throw new Error(`Producto no encontrado: ${item.id_producto}`);
+            }
+
+            if (producto.stock < item.cantidad) {
+                throw new Error(`Stock insuficiente para ${producto.nombre}`);
+            }
+
+            // Actualizar stock
+            await producto.update({
+                stock: producto.stock - item.cantidad
+            }, { transaction });
+
+            // Crear detalle de venta
+            await DetalleVenta.create({
+                id_venta: venta.id_venta,
+                id_producto: item.id_producto,
+                cantidad: item.cantidad,
+                precio_unitario: item.precio_unitario,
+                subtotal_linea: item.subtotal / 100 // Convertir de centavos a pesos y usar el nombre correcto del campo
+            }, { transaction });
+        }
+
+        // 4. Actualizar estados y fechas
+        await pagoEfectivo.update({
+            estado: 'PAGADO',
+            fecha_pago: new Date()
+        }, { transaction });
+
+        await pagoEfectivo.pago.update({
+            estado: 'APROBADO',
+            id_venta: venta.id_venta
+        }, { transaction });
+
+        await transaction.commit();
+
+        return res.json({
+            success: true,
+            mensaje: 'Pago confirmado exitosamente',
+            id_venta: venta.id_venta
+        });
+
+    } catch (error) {
+        await transaction.rollback();
+        console.error('Error al confirmar pago en efectivo:', error);
+        return res.status(500).json({
+            success: false,
+            error: error.message || 'Error al confirmar el pago en efectivo'
+        });
+    }
+};
+
+// Endpoint de prueba para verificar pagos
+const verificarPagos = async (req = request, res = response) => {
+    try {
+        // 1. Contar pagos en efectivo
+        const countPagosEfectivo = await PagoEfectivo.count();
+        console.log('Total de pagos en efectivo:', countPagosEfectivo);
+
+        // 2. Obtener todos los pagos en efectivo
+        const pagosEfectivo = await PagoEfectivo.findAll({
+            include: [{
+                model: Pago,
+                required: false // Cambiamos a false para ver si hay pagos sin relación
+            }]
+        });
+
+        console.log('Pagos en efectivo encontrados:', JSON.stringify(pagosEfectivo, null, 2));
+
+        // 3. Contar pagos generales
+        const countPagos = await Pago.count();
+        console.log('Total de pagos:', countPagos);
+
+        // 4. Obtener todos los pagos con método EFECTIVO
+        const pagosPorEfectivo = await Pago.findAll({
+            where: {
+                metodo_pago: 'EFECTIVO'
+            }
+        });
+
+        console.log('Pagos por efectivo encontrados:', JSON.stringify(pagosPorEfectivo, null, 2));
+
+        return res.json({
+            success: true,
+            pagos_efectivo: {
+                total: countPagosEfectivo,
+                registros: pagosEfectivo
+            },
+            pagos: {
+                total: countPagos,
+                pagos_efectivo: pagosPorEfectivo
+            }
+        });
+
+    } catch (error) {
+        console.error('Error al verificar pagos:', error);
+        return res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+};
+
 module.exports = {
     manejarResultadoPago,
     obtenerBancosPSE,
     iniciarPagoPSE,
     recibirWebhookWompi,
     consultarEstadoPago,
-    consultarEstadoPagoPSE
+    consultarEstadoPagoPSE,
+    iniciarPagoEfectivo,
+    consultarPagoEfectivo,
+    confirmarPagoEfectivo,
+    verificarPagos
 };
