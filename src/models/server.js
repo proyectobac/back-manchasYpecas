@@ -37,40 +37,26 @@ class Server {
       console.log(`Está escuchando por el puerto ${this.port}`);
     });
   }
-
   middlewares() {
     const corsOptions = {
       origin: [
-        'http://localhost:3000',
-        'http://localhost:3001',       
-        'https://7c03-181-237-206-202.ngrok-free.app',
-        /\.ngrok-free\.app$/,
-        process.env.FRONTEND_URL,
-        /\.railway\.app$/  // Permitir dominios de Railway
+        'http://localhost:3000', 'http://localhost:3001',
+        'https://manchas-back-end.onrender.com',
+        'https://manchasypecas.vercel.app', // url vecel oficial
+        'manchasypecas-lq1984kbv-manchasypecas22s-projects.vercel.app', // url inicial al desplegar
+        'manchasypecas-git-main-manchasypecas22s-projects.vercel.app', // url inicial al desplegar
       ],
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With'],
-      exposedHeaders: ['Content-Range', 'X-Content-Range'],
-      maxAge: 600
+      allowedHeaders: ['Content-Type', 'Authorization'],
     };
-
     this.app.use(cors(corsOptions));
-
-    // Middleware de seguridad básica
-    this.app.use((req, res, next) => {
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-      res.setHeader('X-Frame-Options', 'DENY');
-      res.setHeader('X-XSS-Protection', '1; mode=block');
-      next();
-    });
-
-    // Desactiva la caché para evitar problemas con versiones antiguas
     this.app.use((req, res, next) => {
       res.setHeader('Cache-Control', 'no-store');
       next();
     });
   }
+
 
 
   async inicializarBaseDeDatos() {
@@ -79,7 +65,7 @@ class Server {
       const Usuario = require('./usuarios/usuariosModel');
       const Permiso = require('./permisos/permisosModels');
       const RolPermiso = require('./rolPermiso/permisosRol');
-  
+
       // 1. Crear Roles por defecto si no existen
       const rolesPorDefecto = [
         { nombre: 'SuperAdmin', estado: 'Activo' },
@@ -93,7 +79,7 @@ class Server {
         });
       }
       console.log('Roles inicializados.');
-  
+
       // 2. Crear Permisos por defecto si no existen
       const permisosPorDefecto = [
         { nombre_permiso: 'Inicio', ruta: '/inicio' },
@@ -106,7 +92,7 @@ class Server {
         { nombre_permiso: 'Crear Compras', ruta: '/compras/crear' },
         { nombre_permiso: 'lista Compras', ruta: '/compras/lista' },
         { nombre_permiso: 'Tienda', ruta: '/tienda' },
-        {nombre_permiso: 'Ventas', ruta: 'lista/ventas'},
+        { nombre_permiso: 'Ventas', ruta: 'lista/ventas' },
         { nombre_permiso: 'Configuracion', ruta: '/usuarios/lista' },
         { nombre_permiso: 'roles', ruta: '/roles/lista' },
 
@@ -120,7 +106,7 @@ class Server {
         });
       }
       console.log('Permisos inicializados.');
-  
+
       // 3. Crear Usuario por defecto si no existe
       const [usuarioPorDefecto] = await Usuario.findOrCreate({
         where: { correo: 'sionbarbershop5@gmail.com' },
@@ -133,15 +119,15 @@ class Server {
         }
       });
       console.log('Usuario por defecto (SuperAdmin) inicializado.');
-  
+
       // 4. Obtener todos los permisos
       const permisos = await Permiso.findAll();
-  
+
       // 5. Asignar permisos a los roles
       const rolSuperAdmin = await Rol.findOne({ where: { nombre: 'SuperAdmin' } });
       const rolEmpleado = await Rol.findOne({ where: { nombre: 'Empleado' } });
       const rolCliente = await Rol.findOne({ where: { nombre: 'Cliente' } });
-  
+
       // Asignar todos los permisos a SuperAdmin
       if (rolSuperAdmin && permisos.length > 0) {
         for (const permiso of permisos) {
@@ -151,27 +137,27 @@ class Server {
         }
         console.log('Todos los permisos asignados a SuperAdmin.');
       }
-  
+
       // Asignar permisos específicos a Empleado (solo "Crear Compras" y "lista Compras")
       if (rolEmpleado) {
         const permisoCrearCompras = await Permiso.findOne({ where: { nombre_permiso: 'Crear Compras' } });
         const permisoListaCompras = await Permiso.findOne({ where: { nombre_permiso: 'lista Compras' } });
         const permisoDasboardEmpleado = await Permiso.findOne({ where: { nombre_permiso: 'mi portal' } });
 
-           if (permisoDasboardEmpleado) {
+        if (permisoDasboardEmpleado) {
           await RolPermiso.findOrCreate({
             where: { id_rol: rolEmpleado.id_rol, id_permiso: permisoDasboardEmpleado.id_permiso }
           });
           console.log('Permiso "Mi portal " asignado a Empleado.');
         }
-  
+
         if (permisoCrearCompras) {
           await RolPermiso.findOrCreate({
             where: { id_rol: rolEmpleado.id_rol, id_permiso: permisoCrearCompras.id_permiso }
           });
           console.log('Permiso "Crear Compras" asignado a Empleado.');
         }
-  
+
         if (permisoListaCompras) {
           await RolPermiso.findOrCreate({
             where: { id_rol: rolEmpleado.id_rol, id_permiso: permisoListaCompras.id_permiso }
@@ -179,12 +165,12 @@ class Server {
           console.log('Permiso "lista Compras" asignado a Empleado.');
         }
       }
-  
+
       // No asignar permisos a Cliente (solo se crea el rol, pero sin permisos)
       if (rolCliente) {
 
         const permisoTienda = await Permiso.findOne({ where: { nombre_permiso: 'Tienda' } });
-        
+
         if (permisoTienda) {
           await RolPermiso.findOrCreate({
             where: { id_rol: rolCliente.id_rol, id_permiso: permisoTienda.id_permiso }
@@ -193,11 +179,11 @@ class Server {
         }
 
       }
-  
+
       // 6. Asociar todos los permisos al usuario por defecto (SuperAdmin)
       await usuarioPorDefecto.setPermisos(permisos);
       console.log('Permisos asociados directamente al usuario SuperAdmin.');
-  
+
       console.log('Base de datos inicializada correctamente.');
     } catch (error) {
       console.error('Error al inicializar la base de datos:', error);
@@ -210,10 +196,10 @@ class Server {
     this.app.post(`${this.path}/cambiar-contrasena`, recuperarContrasena.cambiarContrasena);
     this.app.post(`${this.path}/solicitar-restablecimiento`, solicitarRestablecimiento.solicitarRestablecimiento);
     this.app.post(`${this.path}/actualizarPerfil`, editarPerfil.actualizarPerfil);
-  
+
     // Rutas de los modelos y controladores
     this.app.use(`${this.path}/upload`, require('../routes/adminProfile/adminProfileRoutes'));
-  
+
     // Ejemplo de cómo manejar rutas para permisos, roles y usuarios
     // Asumiendo que tienes controladores para estas entidades
     this.app.use(`${this.path}/permisos`, require('../routes/permisos/permidosRoues'));
@@ -224,9 +210,9 @@ class Server {
     this.app.use(`${this.path}/compras`, require('../routes/compras/comprasRoutes'));
     this.app.use(`${this.path}/empleados`, require('../routes/empleados/empleadosRoutes'));
     this.app.use(`${this.path}/ventas`, require('../routes/ventas/ventasRotes'));
-    this.app.use(`${this.path}/pagos`, require('../routes/pagos/pagosRoutes')); 
-    this.app.use(`${this.path}/clientes`, require('../routes/clientes/clientesRoutes')); 
-    
+    this.app.use(`${this.path}/pagos`, require('../routes/pagos/pagosRoutes'));
+    this.app.use(`${this.path}/clientes`, require('../routes/clientes/clientesRoutes'));
+
   }
   handleErrors() {
     // Coloca el middleware de manejo de errores al final de la cadena de middlewares
