@@ -724,7 +724,8 @@ const consultarPagoEfectivo = async (req = request, res = response) => {
             fecha_pago: pagoEfectivo.fecha_pago,
             monto: pagoEfectivo.pago.monto / 100, // Convertir de centavos a pesos
             datos_cliente: pagoEfectivo.pago.datos_cliente,
-            items: pagoEfectivo.pago.items
+            items: pagoEfectivo.pago.items,
+            codigo_pago: codigo_pago
         };
 
         console.log('Respuesta a enviar:', respuesta);

@@ -3,6 +3,7 @@ const { Op } = require('sequelize');
 const fs = require('fs'); // Necesario para borrar el archivo temporal de Multer
 const path = require('path'); // Para construir rutas si es necesario (aunque menos ahora)
 const Producto = require('../../models/productos/productosModel');
+const DetallesCompra = require('../../models/detalleCompra/detallesCompraModel');
 const cloudinary = require('../../../cloudinaryConfig'); // CONFIRMA RUTA
 
 // --- Helper para obtener Public ID (similar al de imageController) ---
@@ -147,7 +148,7 @@ const postProducto = async (req, res = response) => {
 // === ACTUALIZAR DATOS (UPDATE) - Adaptado para Cloudinary ===
 const putProducto = async (req, res = response) => {
     const { id } = req.params;
-    const { nombre, descripcion, categoria, estado } = req.body;
+    const { nombre, descripcion, categoria, estado, precioCosto } = req.body;
     let datosParaActualizar = { nombre, descripcion, categoria, estado };
     let oldPublicId = null;
     let producto = null;
@@ -156,65 +157,70 @@ const putProducto = async (req, res = response) => {
         // 1. Buscar el producto existente
         producto = await Producto.findByPk(id);
         if (!producto) {
-            // Si se subió un archivo pero el producto no existe, borrar archivo temporal
             if (req.file && req.file.path && fs.existsSync(req.file.path)) {
-                 fs.unlink(req.file.path, (err) => { if (err) console.error("Error borrando tmp para producto no encontrado:", err); });
+                fs.unlink(req.file.path, (err) => { if (err) console.error("Error borrando tmp para producto no encontrado:", err); });
             }
             return res.status(404).json({ message: `No se encontró un producto con ID ${id}` });
         }
 
-        // 2. Si se subió un NUEVO archivo
-        if (req.file) {
-            try {
-                // Guardar ID de la imagen antigua de Cloudinary (si existe)
-                if (producto.foto) {
-                    oldPublicId = getPublicIdFromUrl(producto.foto);
+        // 2. Si se está actualizando el precio de costo, calcular nuevo precio de venta
+        if (precioCosto !== undefined) {
+            // Buscar el último detalle de compra para obtener el margen
+            const ultimaCompra = await DetallesCompra.findOne({
+                where: { id_producto: id },
+                order: [['createdAt', 'DESC']]
+            });
+
+            if (ultimaCompra && ultimaCompra.margen_aplicado) {
+                // Usar la misma fórmula que en comprasController
+                // Valor venta = Valor producto / (1 - (Margen / 100))
+                const margen = parseFloat(ultimaCompra.margen_aplicado);
+                if (margen < 100) {
+                    const nuevoPrecioVenta = parseFloat(precioCosto) / (1 - (margen / 100));
+                    datosParaActualizar.precioCosto = parseFloat(precioCosto);
+                    datosParaActualizar.precioVenta = parseFloat(nuevoPrecioVenta.toFixed(2));
+                } else {
+                    console.warn(`Margen de ${margen}% es inválido para calcular precio de venta del producto ${id}.`);
+                    datosParaActualizar.precioCosto = parseFloat(precioCosto);
                 }
-
-                // Subir la nueva imagen a Cloudinary
-                const cloudinaryResult = await uploadToCloudinary(req.file.path, 'producto_images');
-
-                // Añadir la nueva URL de Cloudinary a los datos a actualizar
-                datosParaActualizar.foto = cloudinaryResult.secure_url;
-
-            } catch (cloudinaryError) {
-                 // Si Cloudinary falla, no actualizamos la foto, pero podemos continuar actualizando el resto
-                 console.error(`Fallo al subir nueva foto para producto ${id}, se actualizarán solo los datos de texto:`, cloudinaryError);
-                 // NO añadir datosParaActualizar.foto
-                 // El archivo temporal ya se borra dentro de uploadToCloudinary
+            } else {
+                // Si no hay compras previas o no hay margen, solo actualizar el precio de costo
+                datosParaActualizar.precioCosto = parseFloat(precioCosto);
             }
         }
 
-        // 3. Actualizar el producto en la BD (con o sin nueva URL de foto)
-        await producto.update(datosParaActualizar);
-
-        // 4. Si se subió una foto NUEVA con éxito Y había una antigua, borrar la antigua de Cloudinary
-        if (req.file && datosParaActualizar.foto && oldPublicId) { // Verifica que la nueva url se haya añadido
-             await deleteFromCloudinary(oldPublicId);
+        // 3. Si se subió un NUEVO archivo
+        if (req.file) {
+            try {
+                if (producto.foto) {
+                    oldPublicId = getPublicIdFromUrl(producto.foto);
+                }
+                const cloudinaryResult = await uploadToCloudinary(req.file.path, 'producto_images');
+                datosParaActualizar.foto = cloudinaryResult.secure_url;
+            } catch (cloudinaryError) {
+                console.error(`Fallo al subir nueva foto para producto ${id}, se actualizarán solo los datos de texto:`, cloudinaryError);
+            }
         }
 
-        // 5. Responder con éxito
+        // 4. Actualizar el producto en la BD
+        await producto.update(datosParaActualizar);
+
+        // 5. Si se subió una foto NUEVA con éxito Y había una antigua, borrar la antigua
+        if (req.file && datosParaActualizar.foto && oldPublicId) {
+            await deleteFromCloudinary(oldPublicId);
+        }
+
         res.json({
             message: `Producto con ID ${id} actualizado exitosamente`,
-            producto, // Devuelve el producto actualizado
+            producto
         });
 
     } catch (error) {
-        // Error al actualizar en BD
-        // Si falló la BD, pero se subió un archivo nuevo (y no se asignó a datosParaActualizar.foto por error previo)
-        // debemos asegurarnos que el temporal se borre (aunque uploadToCloudinary ya lo intenta)
-         if (req.file && req.file.path && fs.existsSync(req.file.path)) {
-             fs.unlink(req.file.path, (err) => { if(err) console.error("Error borrando tmp tras fallo BD update:", err); });
-         }
-
+        console.error('Error al actualizar el producto:', error);
         if (error.name === 'SequelizeValidationError') {
             const errors = error.errors.map(e => ({ field: e.path, message: e.message }));
             return res.status(400).json({ message: 'Error de validación', errors });
         }
-        if (error.name === 'SequelizeUniqueConstraintError') {
-            return res.status(400).json({ message: 'Ya existe otro producto con este nombre' });
-        }
-        console.error('Error al actualizar el producto (BD):', error);
         res.status(500).json({ message: 'Error interno al actualizar el producto' });
     }
 };

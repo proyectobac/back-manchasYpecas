@@ -4,6 +4,7 @@ const { sequelize } = require('../../../database/config'); // Ajusta ruta
 const Ventas = require("../../models/ventas/ventasModel");
 const DetalleVenta = require("../../models/detalleVentas/detalleVentasModel");
 const Productos = require("../../models/productos/productosModel");
+const Pago = require("../../models/pagos/pagosmodel");
 
 // ---------------------------------------------------------------------
 // Función para Crear una Venta (Pedido del Cliente)
@@ -129,16 +130,32 @@ const createVenta = async (req = request, res = response) => {
 const getVentas = async (req = request, res = response) => {
      try {
         const listVentas = await Ventas.findAll({
-            include: [ // Incluir detalles para la lista puede ser pesado, considera quitarlo o limitar campos
-                 {
-                     model: DetalleVenta,
-                     as: 'detalles',
-                     include: [{ model: Productos, as: 'producto', attributes: ['nombre']}]
-                 }
+            include: [
+                {
+                    model: DetalleVenta,
+                    as: 'detalles',
+                    include: [{ model: Productos, as: 'producto', attributes: ['nombre']}]
+                },
+                {
+                    model: Pago,
+                    as: 'pago',
+                    attributes: ['referencia_pago_interna']
+                }
             ],
             order: [['fecha_venta', 'DESC']]
         });
-        res.json({ ok: true, total: listVentas.length, ventas: listVentas });
+
+        // Transformar la respuesta para mostrar el código de pago
+        const ventasFormateadas = listVentas.map(venta => {
+            const ventaObj = venta.toJSON();
+            if (ventaObj.pago) {
+                ventaObj.pago.codigo_pago = ventaObj.pago.referencia_pago_interna;
+                delete ventaObj.pago.referencia_pago_interna;
+            }
+            return ventaObj;
+        });
+
+        res.json({ ok: true, total: ventasFormateadas.length, ventas: ventasFormateadas });
     } catch (error) {
         console.error('Error al obtener las ventas:', error);
         res.status(500).json({ ok: false, msg: 'Error interno del servidor.' });
