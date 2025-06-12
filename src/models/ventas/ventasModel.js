@@ -32,8 +32,8 @@ const Ventas = sequelize.define('ventas', {
     }
   },
   estado_venta: {
-    // Estados simples: Pendiente (recién creada), Completada (stock descontado), Enviada, Cancelada
-    type: DataTypes.ENUM('Pendiente', 'Completada', 'Enviada', 'Cancelada'),
+    // Estados: Pendiente (recién creada), Completada (stock descontado), Enviada, Recibido (confirmado), Cancelada
+    type: DataTypes.ENUM('Pendiente', 'Completada', 'Enviada', 'Recibido', 'Cancelada'),
     allowNull: false,
     defaultValue: 'Completada', // Asumimos que se completa al crearla con éxito
   },
@@ -61,6 +61,10 @@ const Ventas = sequelize.define('ventas', {
   notas_cliente: {
     type: DataTypes.TEXT,
     allowNull: true, // Notas son opcionales
+  },
+  confirmation_image: {
+    type: DataTypes.STRING,
+    allowNull: true, // La imagen es opcional hasta que se confirme la entrega
   },
   // --- Timestamps ---
   // createdAt y updatedAt se manejan automáticamente

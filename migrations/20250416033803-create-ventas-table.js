@@ -15,7 +15,7 @@ module.exports = {
         allowNull: false, type: Sequelize.DECIMAL(12, 2)
       },
       estado_venta: {
-        allowNull: false, type: Sequelize.ENUM('Pendiente', 'Completada', 'Enviada', 'Cancelada'), defaultValue: 'Completada'
+        allowNull: false, type: Sequelize.ENUM('Pendiente', 'Completada', 'Enviada', 'Recibido', 'Cancelada'), defaultValue: 'Completada'
       },
         referencia_pago: {
         allowNull: true, type: Sequelize.STRING
@@ -37,6 +37,9 @@ module.exports = {
       },
       notas_cliente: {
         allowNull: true, type: Sequelize.TEXT
+      },
+      confirmation_image: {
+        allowNull: true, type: Sequelize.STRING
       },
       createdAt: {
         allowNull: false, type: Sequelize.DATE, defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')

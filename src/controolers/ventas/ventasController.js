@@ -5,6 +5,186 @@ const Ventas = require("../../models/ventas/ventasModel");
 const DetalleVenta = require("../../models/detalleVentas/detalleVentasModel");
 const Productos = require("../../models/productos/productosModel");
 const Pago = require("../../models/pagos/pagosmodel");
+const cloudinary = require('../../../cloudinaryConfig'); // Importar Cloudinary
+const fs = require('fs'); // Para manejar archivos temporales
+
+
+// =====================================================================
+// ==                FUNCIÓN PARA CREAR VENTA MANUAL                  ==
+// ==           (Basada en createVenta, para uso interno)             ==
+// =====================================================================
+const crearVentaManual = async (req = request, res = response) => {
+    // 1. --- Recibir y Validar Datos de Entrada ---
+    const {
+        cliente,
+        items,
+        metodo_pago,
+        referencia_pago // Opcional, por si se quiere registrar una referencia externa
+    } = req.body;
+
+    // Se asume que un middleware (validarJWT) ya verificó el token
+    // y añadió la info del usuario a req.usuario
+    if (!req.usuario || !req.usuario.userId) {
+        return res.status(401).json({ ok: false, msg: "No autorizado. Token inválido o no proporcionado." });
+    }
+    const id_empleado = req.usuario.userId;
+
+    // --- Validaciones de Entrada (tomadas de tu createVenta original) ---
+    if (!cliente || typeof cliente !== 'object' || !items || !Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ ok: false, msg: 'Datos inválidos: Se requiere el objeto "cliente" y al menos un "item".' });
+    }
+    const camposClienteReq = ['nombreCompleto', 'telefono', 'direccion', 'ciudad'];
+    for (const campo of camposClienteReq) {
+        if (!cliente[campo] || String(cliente[campo]).trim() === '') {
+            return res.status(400).json({ ok: false, msg: `Falta información del cliente: ${campo}` });
+        }
+    }
+    if (!metodo_pago) {
+        return res.status(400).json({ ok: false, msg: 'El método de pago es requerido.' });
+    }
+    for (const item of items) {
+        if (!item.id_producto || isNaN(parseInt(item.id_producto)) || !item.cantidad || isNaN(parseInt(item.cantidad)) || item.cantidad <= 0 || item.precioUnitario === undefined || isNaN(parseFloat(item.precioUnitario)) || item.precioUnitario < 0) {
+            return res.status(400).json({ ok: false, msg: `Item inválido: ${JSON.stringify(item)}. Verifique id_producto, cantidad (>0) y precioUnitario (>=0).` });
+        }
+    }
+
+    // --- Iniciar Transacción ---
+    const transaction = await sequelize.transaction();
+
+    try {
+        let calculatedTotalVenta = 0;
+        const productosParaActualizar = [];
+
+        // 2. --- Validar Stock, Estado y Calcular Total (con bloqueo) ---
+        for (const item of items) {
+            // Se usa "Productos" con 's' para coincidir con tu importación
+            const producto = await Productos.findByPk(item.id_producto, {
+                transaction,
+                lock: transaction.LOCK.UPDATE
+            });
+
+            if (!producto) throw new Error(`Producto con ID ${item.id_producto} no encontrado.`);
+            if (producto.estado !== 'Activo') throw new Error(`El producto "${producto.nombre}" no está activo.`);
+            if ((producto.stock || 0) < item.cantidad) throw new Error(`Stock insuficiente para "${producto.nombre}".`);
+
+            productosParaActualizar.push({ producto, cantidadVendida: item.cantidad });
+            calculatedTotalVenta += item.cantidad * item.precioUnitario;
+        }
+
+        // 3. --- Crear Registro de PAGO (Diferencia clave con createVenta) ---
+        const referenciaFinal = referencia_pago || `MANUAL-${metodo_pago.toUpperCase()}-${Date.now()}`;
+        const nuevoPago = await Pago.create({
+            id_usuario: id_empleado,
+            referencia_pago_interna: referenciaFinal,
+            metodo_pago: metodo_pago.toUpperCase(),
+            monto: Math.round(calculatedTotalVenta * 100), // En centavos
+            estado: 'APROBADO', // Se crea directamente como APROBADO
+            datos_cliente: cliente, // Guardamos el objeto cliente completo
+            items: items,
+        }, { transaction });
+
+        // 4. --- Crear VENTA (Cabecera), igual que en tu original pero con más datos ---
+        const nuevaVenta = await Ventas.create({
+            id_usuario: id_empleado, // Se añade el ID del empleado que registra
+            total_venta: parseFloat(calculatedTotalVenta.toFixed(2)),
+            estado_venta: 'Completada',
+            metodo_pago: metodo_pago,
+            referencia_pago: referenciaFinal, // Se guarda la referencia del pago
+            nombre_cliente: cliente.nombreCompleto,
+            telefono_cliente: cliente.telefono,
+            direccion_cliente: cliente.direccion,
+            ciudad_cliente: cliente.ciudad,
+            notas_cliente: cliente.notasAdicionales || null,
+        }, { transaction });
+
+        // 5. --- Asociar Venta al Pago (Paso extra y necesario) ---
+        await nuevoPago.update({ id_venta: nuevaVenta.id_venta }, { transaction });
+
+        // 6. --- Crear DETALLES de Venta y Actualizar Stock (Lógica idéntica al original) ---
+        for (const item of items) {
+            const subtotalLinea = item.cantidad * item.precioUnitario;
+            await DetalleVenta.create({
+                id_venta: nuevaVenta.id_venta,
+                id_producto: item.id_producto,
+                cantidad: item.cantidad,
+                precio_unitario: parseFloat(item.precioUnitario.toFixed(2)),
+                subtotal_linea: parseFloat(subtotalLinea.toFixed(2))
+            }, { transaction });
+
+            const infoProducto = productosParaActualizar.find(p => p.producto.id_producto === item.id_producto);
+            if (infoProducto) {
+                infoProducto.producto.stock -= infoProducto.cantidadVendida;
+                await infoProducto.producto.save({ transaction });
+            } else {
+                throw new Error(`Error crítico: No se encontró info para actualizar stock del producto ID ${item.id_producto}.`);
+            }
+        }
+
+        // 7. --- Confirmar Transacción ---
+        await transaction.commit();
+
+        // 8. --- Respuesta Exitosa ---
+        res.status(201).json({
+            ok: true,
+            msg: 'Venta manual creada exitosamente',
+            venta: {
+                id_venta: nuevaVenta.id_venta,
+                referencia_pago: nuevaVenta.referencia_pago
+            }
+        });
+
+    } catch (error) {
+        await transaction.rollback();
+        console.error('Error al crear la venta manual:', error.message);
+        res.status(500).json({
+            ok: false,
+            msg: 'Error interno al procesar la venta.',
+            error: error.message
+        });
+    }
+};
+
+// ... al lado de tus otras funciones del controlador ...
+
+// =====================================================================
+// ==              FUNCIÓN PARA MARCAR UNA VENTA COMO ENVIADA         ==
+// =====================================================================
+const marcarComoEnviada = async (req = request, res = response) => {
+    const { id } = req.params; // ID de la venta
+
+    try {
+        const venta = await Ventas.findByPk(id);
+
+        if (!venta) {
+            return res.status(404).json({ ok: false, msg: `Venta con ID ${id} no encontrada.` });
+        }
+
+        // Solo se pueden enviar ventas que estén 'Completada'
+        if (venta.estado_venta !== 'Completada') {
+            return res.status(400).json({
+                ok: false,
+                msg: `Solo se pueden marcar como enviadas las ventas en estado 'Completada'. Estado actual: ${venta.estado_venta}`
+            });
+        }
+
+        await venta.update({ estado_venta: 'Enviada' });
+
+        res.json({
+            ok: true,
+            msg: `La venta #${id} ha sido marcada como 'Enviada'.`,
+            venta: venta
+        });
+
+    } catch (error) {
+        console.error('Error al marcar la venta como enviada:', error);
+        res.status(500).json({
+            ok: false,
+            msg: 'Error interno del servidor.'
+        });
+    }
+};
+
+
 
 // ---------------------------------------------------------------------
 // Función para Crear una Venta (Pedido del Cliente)
@@ -23,10 +203,10 @@ const createVenta = async (req = request, res = response) => {
             return res.status(400).json({ ok: false, msg: `Falta información del cliente: ${campo}` });
         }
     }
-     // Validar teléfono (simple)
-     if (!/^\d+$/.test(cliente.telefono)) {
-         return res.status(400).json({ ok: false, msg: 'Formato de teléfono inválido (solo números).' });
-     }
+    // Validar teléfono (simple)
+    if (!/^\d+$/.test(cliente.telefono)) {
+        return res.status(400).json({ ok: false, msg: 'Formato de teléfono inválido (solo números).' });
+    }
 
     // Validar items
     for (const item of items) {
@@ -54,8 +234,8 @@ const createVenta = async (req = request, res = response) => {
                 return res.status(404).json({ ok: false, msg: `Producto con ID ${item.id_producto} no encontrado.` });
             }
             if (producto.estado !== 'Activo') {
-                 await transaction.rollback();
-                 return res.status(400).json({ ok: false, msg: `El producto "${producto.nombre}" no está activo y no se puede vender.` });
+                await transaction.rollback();
+                return res.status(400).json({ ok: false, msg: `El producto "${producto.nombre}" no está activo y no se puede vender.` });
             }
             if ((producto.stock || 0) < item.cantidad) {
                 await transaction.rollback();
@@ -99,8 +279,8 @@ const createVenta = async (req = request, res = response) => {
                 infoProducto.producto.stock -= infoProducto.cantidadVendida;
                 await infoProducto.producto.save({ transaction });
             } else {
-                 // Esto no debería ocurrir si la lógica es correcta, pero es una salvaguarda
-                 throw new Error(`Error crítico: No se encontró información para actualizar stock del producto ID ${item.id_producto}.`);
+                // Esto no debería ocurrir si la lógica es correcta, pero es una salvaguarda
+                throw new Error(`Error crítico: No se encontró información para actualizar stock del producto ID ${item.id_producto}.`);
             }
         }
 
@@ -128,13 +308,13 @@ const createVenta = async (req = request, res = response) => {
 
 // --- Funciones Opcionales (getVentas, getVentaById) ---
 const getVentas = async (req = request, res = response) => {
-     try {
+    try {
         const listVentas = await Ventas.findAll({
             include: [
                 {
                     model: DetalleVenta,
                     as: 'detalles',
-                    include: [{ model: Productos, as: 'producto', attributes: ['nombre']}]
+                    include: [{ model: Productos, as: 'producto', attributes: ['nombre'] }]
                 },
                 {
                     model: Pago,
@@ -164,12 +344,12 @@ const getVentas = async (req = request, res = response) => {
 
 const getVentaById = async (req = request, res = response) => {
     const { id } = req.params;
-     if (isNaN(parseInt(id))) {
+    if (isNaN(parseInt(id))) {
         return res.status(400).json({ ok: false, msg: 'ID de venta inválido.' });
     }
     try {
         const venta = await Ventas.findByPk(id, {
-             include: [
+            include: [
                 {
                     model: DetalleVenta,
                     as: 'detalles',
@@ -187,9 +367,105 @@ const getVentaById = async (req = request, res = response) => {
     }
 };
 
+// ---------------------------------------------------------------------
+// Función para Confirmar Entrega de una Venta con Imagen
+// ---------------------------------------------------------------------
+const confirmDelivery = async (req = request, res = response) => {
+    const { id } = req.params; // ID de la venta
+
+    try {
+        // 1. Validar que existe la venta
+        const venta = await Ventas.findByPk(id);
+        if (!venta) {
+            // Si hay archivo temporal, borrarlo
+            if (req.file && req.file.path) {
+                fs.unlinkSync(req.file.path);
+            }
+            return res.status(404).json({
+                ok: false,
+                msg: `No se encontró la venta con ID ${id}.`
+            });
+        }
+
+        // 2. Validar que es una venta con pago PSE y en estado Enviada
+        if (venta.metodo_pago !== 'PSE') {
+            if (req.file && req.file.path) {
+                fs.unlinkSync(req.file.path);
+            }
+            return res.status(400).json({
+                ok: false,
+                msg: 'Solo se pueden confirmar entregas de ventas pagadas por PSE.'
+            });
+        }
+
+        if (venta.estado_venta !== 'Enviada') {
+            if (req.file && req.file.path) {
+                fs.unlinkSync(req.file.path);
+            }
+            return res.status(400).json({
+                ok: false,
+                msg: 'Solo se pueden confirmar entregas de ventas en estado Enviada.'
+            });
+        }
+
+        // 3. Validar que se subió una imagen
+        if (!req.file) {
+            return res.status(400).json({
+                ok: false,
+                msg: 'Se requiere una imagen de confirmación de entrega.'
+            });
+        }
+
+        // 4. Subir imagen a Cloudinary
+        const result = await cloudinary.uploader.upload(req.file.path, {
+            folder: 'delivery_confirmations',
+            transformation: [
+                { width: 1024, height: 1024, crop: 'limit' },
+                { quality: 'auto' },
+                { fetch_format: 'auto' }
+            ]
+        });
+
+        // 5. Borrar archivo temporal
+        fs.unlinkSync(req.file.path);
+
+        // 6. Actualizar la venta
+        await venta.update({
+            estado_venta: 'Recibido',
+            confirmation_image: result.secure_url
+        });
+
+        // 7. Responder con éxito
+        res.json({
+            ok: true,
+            msg: 'Entrega confirmada exitosamente.',
+            venta: {
+                id_venta: venta.id_venta,
+                estado_venta: venta.estado_venta,
+                confirmation_image: venta.confirmation_image
+            }
+        });
+
+    } catch (error) {
+        // Si hay error y existe archivo temporal, borrarlo
+        if (req.file && req.file.path && fs.existsSync(req.file.path)) {
+            fs.unlinkSync(req.file.path);
+        }
+        console.error('Error al confirmar la entrega:', error);
+        res.status(500).json({
+            ok: false,
+            msg: 'Error interno al confirmar la entrega.',
+            error: error.message
+        });
+    }
+};
+
 // --- Exportar ---
 module.exports = {
     createVenta,
-    getVentas,      // Opcional
-    getVentaById    // Opcional
+    getVentas,
+    getVentaById,
+    confirmDelivery,
+    marcarComoEnviada,
+    crearVentaManual
 };
