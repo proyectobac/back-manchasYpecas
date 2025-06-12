@@ -13,6 +13,16 @@ const Ventas = sequelize.define('ventas', {
     allowNull: false,
     defaultValue: DataTypes.NOW,
   },
+    metodo_pago: {
+    type: DataTypes.STRING,
+    allowNull: true, // Ponlo en true por si tienes ventas antiguas sin este dato
+  },
+
+    referencia_pago: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    unique: true, // Cada venta debe tener una referencia de pago única
+  },
   total_venta: { // Calculado en el backend para seguridad
     type: DataTypes.DECIMAL(12, 2),
     allowNull: false,

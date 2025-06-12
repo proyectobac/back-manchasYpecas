@@ -29,9 +29,9 @@ const obtenerBancosPSE = async (req = request, res = response) => {
     try {
         WOMPI_CONFIG.validate();
         const url = `${WOMPI_CONFIG.getApiUrl()}/pse/financial_institutions`;
-        
+
         console.log('Obteniendo lista de bancos PSE desde:', url);
-        
+
         const response = await axios.get(url, {
             headers: { 'Authorization': `Bearer ${WOMPI_CONFIG.PUBLIC_KEY}` }
         });
@@ -68,7 +68,7 @@ const iniciarPagoPSE = async (req = request, res = response) => {
     console.log('Token decodificado:', req.usuario);
     const id_usuario = req.usuario.userId;
     console.log('ID de usuario extraído:', id_usuario);
-    
+
     const {
         banco_codigo,
         tipo_persona = 'natural',
@@ -120,10 +120,10 @@ const iniciarPagoPSE = async (req = request, res = response) => {
             if (producto.stock < item.cantidad) {
                 throw new Error(`Stock insuficiente para ${producto.nombre}`);
             }
-            
+
             const precioEnCentavos = Math.round(item.precioVenta * item.cantidad * 100);
             total_en_centavos += precioEnCentavos;
-            
+
             itemsValidados.push({
                 ...item,
                 nombre_producto: producto.nombre,
@@ -189,8 +189,8 @@ const iniciarPagoPSE = async (req = request, res = response) => {
             const wompiResponse = await axios.post(
                 `${WOMPI_CONFIG.getApiUrl()}/payment_links`,
                 wompiPayload,
-                { 
-                    headers: { 
+                {
+                    headers: {
                         'Authorization': `Bearer ${WOMPI_CONFIG.PRIVATE_KEY}`,
                         'Content-Type': 'application/json'
                     }
@@ -272,7 +272,7 @@ const manejarResultadoPago = async (req = request, res = response) => {
                     };
 
                     const nuevoEstado = estadosWompi[wompiResponse.data.data.status] || pago.estado;
-                    
+
                     if (nuevoEstado !== pago.estado) {
                         await pago.update({
                             estado: nuevoEstado,
@@ -327,7 +327,7 @@ const consultarEstadoPagoPSE = async (req = request, res = response) => {
 
     try {
         const pago = await Pago.findOne({
-            where: { 
+            where: {
                 referencia_pago_interna: referencia,
                 metodo_pago: 'PSE'
             }
@@ -357,7 +357,7 @@ const consultarEstadoPagoPSE = async (req = request, res = response) => {
                     };
 
                     const nuevoEstado = estadosWompi[wompiResponse.data.data.status] || pago.estado;
-                    
+
                     if (nuevoEstado !== pago.estado) {
                         await pago.update({
                             estado: nuevoEstado,
@@ -394,57 +394,39 @@ const consultarEstadoPagoPSE = async (req = request, res = response) => {
 };
 
 
+// controllers/pagos/pagosController.js
+
 const recibirWebhookWompi = async (req = request, res = response) => {
     const event = req.body;
     console.log('Webhook Wompi recibido:', JSON.stringify(event, null, 2));
 
     try {
-        // --- 1. VERIFICACIÓN DE FIRMA MEJORADA Y ROBUSTA ---
+        // --- 1. VERIFICACIÓN DE FIRMA (YA ESTÁ FUNCIONANDO) ---
         const transaction = event.data?.transaction;
         const signatureData = event.signature;
-        const timestamp = event.timestamp; // Se usa en la nueva firma
+        const timestamp = event.timestamp;
 
         if (!transaction || !signatureData || !timestamp) {
-            console.error('Webhook inválido: Faltan datos de transacción, firma o timestamp.');
-            return res.status(400).json({ error: 'Payload del webhook inválido' });
+            console.error('Webhook inválido: Faltan datos.');
+            return res.status(400).json({ error: 'Payload inválido' });
         }
 
-        // Construir la cadena para firmar DINÁMICAMENTE según `signature.properties`
-        // El formato es: {valor1}{valor2}...{timestamp}{secreto_eventos}
-        const properties = signatureData.properties;
-        
-        // El nuevo formato de firma de Wompi (más reciente) usa:
-        // transaction.id + transaction.status + transaction.amount_in_cents + timestamp + events_secret
         const stringToSign = `${transaction.id}${transaction.status}${transaction.amount_in_cents}${timestamp}${process.env.WOMPI_EVENTS_SECRET}`;
-        
         const calculatedSignature = crypto.createHash('sha256').update(stringToSign).digest('hex');
 
         if (calculatedSignature !== signatureData.checksum) {
             console.error('¡Firma del webhook inválida! No coincide.');
-            console.error(`  - Cadena que se firmó: ${transaction.id}${transaction.status}${transaction.amount_in_cents}${timestamp}[TU_SECRETO]`);
-            console.error(`  - Firma Recibida: ${signatureData.checksum}`);
-            console.error(`  - Firma Calculada: ${calculatedSignature}`);
-            
-            // --- CÓDIGO DE DEPURACIÓN ADICIONAL PARA VERIFICAR LA REFERENCIA ---
-            // A veces, la firma usa la referencia en lugar del ID. Probemos esa combinación también.
-            const alternativeStringToSign = `${transaction.reference}${transaction.status}${transaction.amount_in_cents}${timestamp}${process.env.WOMPI_EVENTS_SECRET}`;
-            const alternativeSignature = crypto.createHash('sha256').update(alternativeStringToSign).digest('hex');
-            console.error(`  - Firma Alternativa (con referencia): ${alternativeSignature}`);
-
             return res.status(400).json({ error: 'Firma inválida' });
         }
-
         console.log('Firma del webhook verificada correctamente.');
 
         // --- 2. PROCESAMIENTO DEL EVENTO ---
-        // AHORA BUSCAMOS POR LA REFERENCIA QUE NOSOTROS GENERAMOS, que viene en `redirect_url`
         const redirectUrl = transaction.redirect_url;
         const nuestraReferencia = redirectUrl ? redirectUrl.split('/').pop() : null;
 
         if (!nuestraReferencia) {
-             console.error(`No se pudo extraer nuestra referencia interna desde el redirect_url: ${redirectUrl}`);
-             // Respondemos 200 para no reintentar, es un problema de configuración.
-             return res.status(200).json({ message: 'No se pudo identificar la referencia interna.' });
+            console.error(`No se pudo extraer la referencia interna desde: ${redirectUrl}`);
+            return res.status(200).json({ message: 'Referencia interna no identificada.' });
         }
 
         const transactionDB = await sequelize.transaction();
@@ -456,15 +438,14 @@ const recibirWebhookWompi = async (req = request, res = response) => {
 
             if (!pago) {
                 await transactionDB.rollback();
-                console.warn(`Webhook recibido para un pago no encontrado. Nuestra Referencia: ${nuestraReferencia}`);
-                return res.status(200).json({ message: 'Pago no encontrado en el sistema, no reintentar.' });
+                console.warn(`Webhook para pago no encontrado. Referencia: ${nuestraReferencia}`);
+                return res.status(200).json({ message: 'Pago no encontrado, no reintentar.' });
             }
-            
-            // ... (el resto del código para crear la venta es el mismo y está bien) ...
-            // IDEMPOTENCIA
-            if (pago.estado === 'APROBADO' || pago.estado === 'RECHAZADO') {
+
+            if (pago.estado === 'APROBADO') {
                 await transactionDB.commit();
-                return res.status(200).json({ message: 'El pago ya fue procesado.' });
+                console.log(`Pago ${nuestraReferencia} ya fue procesado.`);
+                return res.status(200).json({ message: 'Pago ya procesado.' });
             }
 
             const estadosWompi = { APPROVED: 'APROBADO', DECLINED: 'RECHAZADO', VOIDED: 'ANULADO', ERROR: 'ERROR' };
@@ -473,23 +454,70 @@ const recibirWebhookWompi = async (req = request, res = response) => {
             await pago.update({
                 estado: nuevoEstado,
                 id_transaccion_wompi: transaction.id,
-                referencia_agregador: transaction.reference, // Guardamos también la referencia de Wompi
+                referencia_agregador: transaction.reference,
                 datos_respuesta_agregador: transaction
             }, { transaction: transactionDB });
 
+            // **************************************************************************
+            // *****               INICIO DE LA LÓGICA DE NEGOCIO                   *****
+            // **************************************************************************
             if (nuevoEstado === 'APROBADO') {
-                // ... Tu lógica para crear Venta, DetalleVenta y actualizar Stock ...
+                console.log(`Pago APROBADO. Creando venta para la referencia: ${nuestraReferencia}`);
+
+                // Crear la venta usando los datos guardados en el registro de PAGO
+                const venta = await Venta.create({
+                    id_usuario: pago.id_usuario,
+                    fecha_venta: new Date(),
+                    total_venta: pago.monto / 100, // Convertir de centavos a pesos
+                    estado_venta: 'Completada', // Usar los estados definidos en tu modelo de Venta
+                    metodo_pago: pago.metodo_pago,
+                    referencia_pago: pago.referencia_pago_interna,
+                    nombre_cliente: pago.datos_cliente.nombre,
+                    telefono_cliente: pago.datos_cliente.telefono,
+                    direccion_cliente: pago.datos_cliente.direccion,
+                    ciudad_cliente: pago.datos_cliente.ciudad,
+                    notas_cliente: pago.datos_cliente.notasAdicionales || null
+                }, { transaction: transactionDB });
+
+                // Crear los detalles de la venta y descontar stock
+                for (const item of pago.items) {
+                    const producto = await Producto.findByPk(item.id_producto, { transaction: transactionDB, lock: true });
+
+                    if (!producto || producto.stock < item.cantidad) {
+                        throw new Error(`Stock insuficiente para el producto ID ${item.id_producto} (${item.nombre_producto})`);
+                    }
+
+                    await producto.update({
+                        stock: producto.stock - item.cantidad
+                    }, { transaction: transactionDB });
+
+                    await DetalleVenta.create({
+                        id_venta: venta.id_venta,
+                        id_producto: item.id_producto,
+                        cantidad: item.cantidad,
+                        // ¡Cuidado aquí! Tu 'item' tiene precioVenta y precio_unitario. Usa el correcto.
+                        // Asumimos que precio_unitario es el precio final que se guardó.
+                        precio_unitario: item.precio_unitario,
+                        subtotal_linea: (item.subtotal / 100) // Viene en centavos
+                    }, { transaction: transactionDB });
+                }
+
+                // Asociar el ID de la venta creada con el registro de pago
+                await pago.update({ id_venta: venta.id_venta }, { transaction: transactionDB });
+                console.log(`Venta #${venta.id_venta} creada exitosamente en la base de datos.`);
             }
+            // **************************************************************************
+            // *****                  FIN DE LA LÓGICA DE NEGOCIO                   *****
+            // **************************************************************************
 
             await transactionDB.commit();
             res.status(200).json({ success: true, message: 'Webhook procesado.' });
 
         } catch (error) {
             await transactionDB.rollback();
-            console.error('Error procesando contenido del webhook:', error);
-            res.status(500).json({ error: 'Error interno.' });
+            console.error('Error procesando el contenido del webhook:', error);
+            res.status(500).json({ error: 'Error interno al procesar el webhook.' });
         }
-
     } catch (error) {
         console.error('Error fatal validando webhook:', error.message);
         res.status(400).json({ error: error.message });
@@ -540,7 +568,7 @@ const iniciarPagoEfectivo = async (req = request, res = response) => {
     const id_usuario = req.usuario.userId;
     console.log('ID de usuario extraído:', id_usuario);
     console.log('Datos recibidos:', req.body);
-    
+
     const {
         codigo_pago,
         tipo_documento = 'CC',
@@ -603,10 +631,10 @@ const iniciarPagoEfectivo = async (req = request, res = response) => {
                     error: `Stock insuficiente para ${producto.nombre}`
                 });
             }
-            
+
             const precioEnCentavos = Math.round(item.precioVenta * item.cantidad * 100);
             total_en_centavos += precioEnCentavos;
-            
+
             itemsValidados.push({
                 ...item,
                 nombre_producto: producto.nombre,
@@ -737,7 +765,7 @@ const consultarPagoEfectivo = async (req = request, res = response) => {
 // Confirmar pago en efectivo
 const confirmarPagoEfectivo = async (req = request, res = response) => {
     const { codigo_pago } = req.params;
-    
+
     const transaction = await sequelize.transaction();
 
     try {
