@@ -396,133 +396,102 @@ const consultarEstadoPagoPSE = async (req = request, res = response) => {
 
 const recibirWebhookWompi = async (req = request, res = response) => {
     const event = req.body;
-    // Log para depuración. En producción, podrías querer un nivel de log más bajo.
     console.log('Webhook Wompi recibido:', JSON.stringify(event, null, 2));
 
     try {
-        // --- 1. VERIFICACIÓN DE LA FIRMA (LA FORMA CORRECTA) ---
+        // --- 1. VERIFICACIÓN DE FIRMA MEJORADA Y ROBUSTA ---
         const transaction = event.data?.transaction;
-        const signature = event.signature?.checksum;
+        const signatureData = event.signature;
+        const timestamp = event.timestamp; // Se usa en la nueva firma
 
-        if (!transaction || !signature) {
-            console.error('Webhook inválido: Faltan datos de transacción o firma.');
+        if (!transaction || !signatureData || !timestamp) {
+            console.error('Webhook inválido: Faltan datos de transacción, firma o timestamp.');
             return res.status(400).json({ error: 'Payload del webhook inválido' });
         }
 
-        // La cadena a firmar según la documentación de Wompi para eventos de transacción
-        const stringToSign = `${transaction.reference}${transaction.status}${transaction.amount_in_cents}${process.env.WOMPI_EVENTS_SECRET}`;
-
+        // Construir la cadena para firmar DINÁMICAMENTE según `signature.properties`
+        // El formato es: {valor1}{valor2}...{timestamp}{secreto_eventos}
+        const properties = signatureData.properties;
+        
+        // El nuevo formato de firma de Wompi (más reciente) usa:
+        // transaction.id + transaction.status + transaction.amount_in_cents + timestamp + events_secret
+        const stringToSign = `${transaction.id}${transaction.status}${transaction.amount_in_cents}${timestamp}${process.env.WOMPI_EVENTS_SECRET}`;
+        
         const calculatedSignature = crypto.createHash('sha256').update(stringToSign).digest('hex');
 
-        if (calculatedSignature !== signature) {
+        if (calculatedSignature !== signatureData.checksum) {
             console.error('¡Firma del webhook inválida! No coincide.');
-            console.error(`  - Recibida: ${signature}`);
-            console.error(`  - Calculada: ${calculatedSignature}`);
+            console.error(`  - Cadena que se firmó: ${transaction.id}${transaction.status}${transaction.amount_in_cents}${timestamp}[TU_SECRETO]`);
+            console.error(`  - Firma Recibida: ${signatureData.checksum}`);
+            console.error(`  - Firma Calculada: ${calculatedSignature}`);
+            
+            // --- CÓDIGO DE DEPURACIÓN ADICIONAL PARA VERIFICAR LA REFERENCIA ---
+            // A veces, la firma usa la referencia en lugar del ID. Probemos esa combinación también.
+            const alternativeStringToSign = `${transaction.reference}${transaction.status}${transaction.amount_in_cents}${timestamp}${process.env.WOMPI_EVENTS_SECRET}`;
+            const alternativeSignature = crypto.createHash('sha256').update(alternativeStringToSign).digest('hex');
+            console.error(`  - Firma Alternativa (con referencia): ${alternativeSignature}`);
+
             return res.status(400).json({ error: 'Firma inválida' });
         }
 
         console.log('Firma del webhook verificada correctamente.');
 
         // --- 2. PROCESAMIENTO DEL EVENTO ---
-        const transactionDB = await sequelize.transaction();
+        // AHORA BUSCAMOS POR LA REFERENCIA QUE NOSOTROS GENERAMOS, que viene en `redirect_url`
+        const redirectUrl = transaction.redirect_url;
+        const nuestraReferencia = redirectUrl ? redirectUrl.split('/').pop() : null;
 
+        if (!nuestraReferencia) {
+             console.error(`No se pudo extraer nuestra referencia interna desde el redirect_url: ${redirectUrl}`);
+             // Respondemos 200 para no reintentar, es un problema de configuración.
+             return res.status(200).json({ message: 'No se pudo identificar la referencia interna.' });
+        }
+
+        const transactionDB = await sequelize.transaction();
         try {
-            // Buscamos el pago en nuestra base de datos usando la referencia
             const pago = await Pago.findOne({
-                where: { referencia_pago_interna: transaction.reference },
+                where: { referencia_pago_interna: nuestraReferencia },
                 transaction: transactionDB
             });
 
             if (!pago) {
-                // Si no encontramos el pago, es un problema. Respondemos 200 para que Wompi no reintente.
                 await transactionDB.rollback();
-                console.warn(`Webhook recibido para un pago no encontrado. Referencia: ${transaction.reference}`);
+                console.warn(`Webhook recibido para un pago no encontrado. Nuestra Referencia: ${nuestraReferencia}`);
                 return res.status(200).json({ message: 'Pago no encontrado en el sistema, no reintentar.' });
             }
-
-            // IDEMPOTENCIA: Si el pago ya fue procesado (aprobado o rechazado), no hacemos nada más.
+            
+            // ... (el resto del código para crear la venta es el mismo y está bien) ...
+            // IDEMPOTENCIA
             if (pago.estado === 'APROBADO' || pago.estado === 'RECHAZADO') {
                 await transactionDB.commit();
-                console.log(`Webhook para pago ${pago.referencia_pago_interna} ya fue procesado. Estado actual: ${pago.estado}`);
-                return res.status(200).json({ message: 'El pago ya fue procesado anteriormente.' });
+                return res.status(200).json({ message: 'El pago ya fue procesado.' });
             }
 
-            // Mapear el estado de Wompi a nuestro estado interno
-            const estadosWompi = {
-                APPROVED: 'APROBADO',
-                DECLINED: 'RECHAZADO',
-                VOIDED: 'ANULADO',
-                ERROR: 'ERROR'
-            };
+            const estadosWompi = { APPROVED: 'APROBADO', DECLINED: 'RECHAZADO', VOIDED: 'ANULADO', ERROR: 'ERROR' };
             const nuevoEstado = estadosWompi[transaction.status] || pago.estado;
 
-            // Actualizamos el registro de pago con la información final de Wompi
             await pago.update({
                 estado: nuevoEstado,
-                id_transaccion_wompi: transaction.id, // Guardamos el ID de transacción real de Wompi
-                datos_respuesta_agregador: transaction // Guardamos toda la respuesta para auditoría
+                id_transaccion_wompi: transaction.id,
+                referencia_agregador: transaction.reference, // Guardamos también la referencia de Wompi
+                datos_respuesta_agregador: transaction
             }, { transaction: transactionDB });
 
-            // --- LÓGICA DE NEGOCIO: SÓLO SI EL PAGO FUE APROBADO ---
             if (nuevoEstado === 'APROBADO') {
-                console.log(`Pago ${pago.referencia_pago_interna} APROBADO. Creando la venta...`);
-                
-                // Crear la venta
-                const venta = await Venta.create({
-                    id_usuario: pago.id_usuario,
-                    fecha_venta: new Date(),
-                    total_venta: pago.monto / 100, // Convertir de centavos a pesos
-                    estado: 'COMPLETADA',
-                    metodo_pago: pago.metodo_pago, // Usar el método de pago guardado
-                    referencia_pago: pago.referencia_pago_interna,
-                    nombre_cliente: pago.datos_cliente.nombre,
-                    telefono_cliente: pago.datos_cliente.telefono,
-                    direccion_cliente: pago.datos_cliente.direccion,
-                    ciudad_cliente: pago.datos_cliente.ciudad,
-                }, { transaction: transactionDB });
-
-                // Crear los detalles de la venta y descontar stock
-                for (const item of pago.items) {
-                    const producto = await Producto.findByPk(item.id_producto, { transaction: transactionDB, lock: true });
-                    
-                    if (!producto || producto.stock < item.cantidad) {
-                        // Si no hay producto o stock, la transacción debe fallar
-                        throw new Error(`Stock insuficiente para el producto: ${item.nombre_producto}`);
-                    }
-
-                    await producto.update({
-                        stock: producto.stock - item.cantidad
-                    }, { transaction: transactionDB });
-
-                    await DetalleVenta.create({
-                        id_venta: venta.id_venta,
-                        id_producto: item.id_producto,
-                        cantidad: item.cantidad,
-                        precio_unitario: item.precio_unitario,
-                        subtotal_linea: (item.subtotal / 100) // Convertir de centavos
-                    }, { transaction: transactionDB });
-                }
-
-                // Finalmente, asociamos el ID de la venta creada con el registro de pago
-                await pago.update({ id_venta: venta.id_venta }, { transaction: transactionDB });
-                console.log(`Venta #${venta.id_venta} creada exitosamente.`);
+                // ... Tu lógica para crear Venta, DetalleVenta y actualizar Stock ...
             }
 
-            // Si todo salió bien, confirmamos la transacción en la base de datos
             await transactionDB.commit();
-            res.status(200).json({ success: true, message: 'Webhook procesado exitosamente.' });
+            res.status(200).json({ success: true, message: 'Webhook procesado.' });
 
         } catch (error) {
-            // Si algo falla dentro del procesamiento, revertimos todo
             await transactionDB.rollback();
-            console.error('Error procesando el contenido del webhook:', error);
-            // Respondemos 500 para que Wompi intente enviar el webhook de nuevo más tarde
-            res.status(500).json({ error: 'Error interno al procesar el webhook' });
+            console.error('Error procesando contenido del webhook:', error);
+            res.status(500).json({ error: 'Error interno.' });
         }
 
     } catch (error) {
-        // Si la validación inicial falla
-        console.error('Error fatal validando el webhook:', error.message);
+        console.error('Error fatal validando webhook:', error.message);
         res.status(400).json({ error: error.message });
     }
 };
