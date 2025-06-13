@@ -140,30 +140,39 @@ class Server {
 
       // Asignar permisos específicos a Empleado (solo "Crear Compras" y "lista Compras")
       if (rolEmpleado) {
-        const permisoCrearCompras = await Permiso.findOne({ where: { nombre_permiso: 'Crear Compras' } });
-        const permisoListaCompras = await Permiso.findOne({ where: { nombre_permiso: 'lista Compras' } });
-        const permisoDasboardEmpleado = await Permiso.findOne({ where: { nombre_permiso: 'mi portal' } });
+        // const permisoCrearCompras = await Permiso.findOne({ where: { nombre_permiso: 'Crear Compras' } });
+        const permisoListaVentas = await Permiso.findOne({ where: { nombre_permiso: 'Ventas' } });
 
-        if (permisoDasboardEmpleado) {
-          await RolPermiso.findOrCreate({
-            where: { id_rol: rolEmpleado.id_rol, id_permiso: permisoDasboardEmpleado.id_permiso }
-          });
-          console.log('Permiso "Mi portal " asignado a Empleado.');
-        }
+        // const permisoDasboardEmpleado = await Permiso.findOne({ where: { nombre_permiso: 'mi portal' } });
 
-        if (permisoCrearCompras) {
-          await RolPermiso.findOrCreate({
-            where: { id_rol: rolEmpleado.id_rol, id_permiso: permisoCrearCompras.id_permiso }
-          });
-          console.log('Permiso "Crear Compras" asignado a Empleado.');
-        }
+        // if (permisoDasboardEmpleado) {
+        //   await RolPermiso.findOrCreate({
+        //     where: { id_rol: rolEmpleado.id_rol, id_permiso: permisoDasboardEmpleado.id_permiso }
+        //   });
+        //   console.log('Permiso "Mi portal " asignado a Empleado.');
+        // }
 
-        if (permisoListaCompras) {
+
+           if (permisoListaVentas) {
           await RolPermiso.findOrCreate({
-            where: { id_rol: rolEmpleado.id_rol, id_permiso: permisoListaCompras.id_permiso }
+            where: { id_rol: rolEmpleado.id_rol, id_permiso: permisoListaVentas.id_permiso }
           });
-          console.log('Permiso "lista Compras" asignado a Empleado.');
+          console.log('Permiso "lista de ventas" asignado a Empleado.');
         }
+        // if (permisoCrearCompras) {
+        //   await RolPermiso.findOrCreate({
+        //     where: { id_rol: rolEmpleado.id_rol, id_permiso: permisoCrearCompras.id_permiso }
+        //   });
+        //   console.log('Permiso "Crear Compras" asignado a Empleado.');
+        // }
+      
+
+        // if (permisoListaCompras) {
+        //   await RolPermiso.findOrCreate({
+        //     where: { id_rol: rolEmpleado.id_rol, id_permiso: permisoListaCompras.id_permiso }
+        //   });
+        //   console.log('Permiso "lista Compras" asignado a Empleado.');
+        // }
       }
 
       // No asignar permisos a Cliente (solo se crea el rol, pero sin permisos)
