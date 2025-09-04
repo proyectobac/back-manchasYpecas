@@ -2,6 +2,7 @@
 const { Router } = require('express');
 const route = Router();
 const verificarToken = require('../../../middlewares/verificarToken'); // Asume que tienes este middleware
+const verificarCliente = require('../../../middlewares/verificarCliente'); // Middleware para validar que sea cliente
 const upload = require('../../../middlewares/multer'); // Importar multer para manejar la subida de archivos
 
 const {
@@ -10,7 +11,9 @@ const {
     getVentaById,
     confirmDelivery,
     crearVentaManual,
-    marcarComoEnviada
+    marcarComoEnviada,
+    getMisComprasCliente,
+    getDetalleCompraCliente
 } = require('../../controolers/ventas/ventasController'); // Ajusta ruta
 
 
@@ -40,5 +43,15 @@ route.post('/ventas/:id/confirm-delivery',
 
 // Marcar una venta como Enviada
 route.put('/ventas/:id/marcar-enviada', verificarToken, marcarComoEnviada);
+
+// =====================================================================
+// ==                  RUTAS ESPECÍFICAS PARA CLIENTES              ==
+// =====================================================================
+
+// Obtener las compras del cliente autenticado
+route.get('/cliente/mis-compras', verificarToken, verificarCliente, getMisComprasCliente);
+
+// Obtener el detalle de una compra específica del cliente autenticado
+route.get('/cliente/compra/:id', verificarToken, verificarCliente, getDetalleCompraCliente);
 
 module.exports = route;

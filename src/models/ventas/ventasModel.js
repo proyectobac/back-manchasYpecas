@@ -8,6 +8,14 @@ const Ventas = sequelize.define('ventas', {
     primaryKey: true,
     autoIncrement: true,
   },
+  id_usuario: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    references: {
+      model: 'usuarios',
+      key: 'id_usuario'
+    }
+  },
   fecha_venta: {
     type: DataTypes.DATE,
     allowNull: false,

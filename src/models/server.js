@@ -111,10 +111,12 @@ class Server {
       const [usuarioPorDefecto] = await Usuario.findOrCreate({
         where: { correo: 'sionbarbershop5@gmail.com' },
         defaults: {
-          id_rol: 1, // Asociado al rol de SuperAdmin
+          id_rol: 1, 
           nombre_usuario: 'Admin',
-          contrasena: '12345678S', // ¡Considera hashear la contraseña!
-          telefono: '+3146753115',
+          apellido:'moreno',
+          documento: '1234585965',
+          contrasena: '12345678S', 
+          telefono: '3146753115',
           estado: 'Activo'
         }
       });

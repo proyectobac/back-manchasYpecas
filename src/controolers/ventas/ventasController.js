@@ -251,6 +251,7 @@ const createVenta = async (req = request, res = response) => {
 
         // 3. --- Crear Venta (Cabecera) ---
         const nuevaVenta = await Ventas.create({
+            id_usuario: req.usuario ? req.usuario.userId : null, // Agregar el ID del usuario que hace la compra
             total_venta: parseFloat(calculatedTotalVenta.toFixed(2)),
             estado_venta: 'Completada', // O 'Pendiente' si necesitas confirmación manual
             nombre_cliente: cliente.nombreCompleto,
@@ -460,6 +461,218 @@ const confirmDelivery = async (req = request, res = response) => {
     }
 };
 
+// =====================================================================
+// ==              FUNCIONES PARA CLIENTES - VER SUS COMPRAS        ==
+// =====================================================================
+
+/**
+ * Obtiene todas las compras realizadas por el cliente autenticado
+ * Incluye tanto ventas confirmadas como pagos en efectivo pendientes
+ */
+const getMisComprasCliente = async (req = request, res = response) => {
+    try {
+        // Las validaciones de autenticación y rol se manejan en los middlewares
+        const id_usuario = req.usuario.userId;
+
+        // 1. Obtener las ventas confirmadas del cliente
+        const ventas = await Ventas.findAll({
+            where: { id_usuario: id_usuario },
+            include: [
+                {
+                    model: DetalleVenta,
+                    as: 'detalles',
+                    include: [
+                        {
+                            model: Productos,
+                            as: 'producto',
+                            attributes: ['id_producto', 'nombre', 'foto']
+                        }
+                    ]
+                }
+            ],
+            order: [['fecha_venta', 'DESC']]
+        });
+
+        // 2. Obtener pagos en efectivo pendientes del cliente usando SQL directo
+        const [pagosPendientesRaw] = await sequelize.query(`
+            SELECT 
+                pe.codigo_pago,
+                pe.fecha_vencimiento,
+                pe.createdAt,
+                pe.estado as estado_pago_efectivo,
+                p.id_pago,
+                p.monto,
+                p.estado as estado_pago,
+                p.datos_cliente,
+                p.items
+            FROM pagos_efectivo pe
+            INNER JOIN pagos p ON pe.id_pago = p.id_pago
+            WHERE p.id_usuario = ? 
+                AND p.metodo_pago = 'EFECTIVO' 
+                AND pe.estado = 'PENDIENTE'
+                AND p.estado = 'PENDIENTE'
+            ORDER BY pe.createdAt DESC
+        `, {
+            replacements: [id_usuario]
+        });
+
+        // 3. Formatear ventas confirmadas
+        const ventasFormateadas = ventas.map(venta => ({
+            id_venta: venta.id_venta,
+            numero_referencia: venta.numero_referencia,
+            fecha_venta: venta.fecha_venta,
+            total_venta: venta.total_venta,
+            estado_venta: venta.estado_venta,
+            metodo_pago: venta.metodo_pago,
+            nombre_cliente: venta.nombre_cliente,
+            telefono_cliente: venta.telefono_cliente,
+            direccion_cliente: venta.direccion_cliente,
+            ciudad_cliente: venta.ciudad_cliente,
+            cantidad_productos: venta.detalles ? venta.detalles.length : 0,
+            tipo: 'venta' // Para identificar que es una venta confirmada
+        }));
+
+        // 4. Formatear pagos pendientes como "compras"
+        const pagosPendientesFormateados = pagosPendientesRaw.map(pagoPendiente => {
+            // Parsear datos_cliente si es string JSON
+            let datosCliente = {};
+            try {
+                datosCliente = typeof pagoPendiente.datos_cliente === 'string' 
+                    ? JSON.parse(pagoPendiente.datos_cliente) 
+                    : pagoPendiente.datos_cliente || {};
+            } catch (e) {
+                datosCliente = {};
+            }
+
+            // Parsear items si es string JSON
+            let items = [];
+            try {
+                items = typeof pagoPendiente.items === 'string' 
+                    ? JSON.parse(pagoPendiente.items) 
+                    : pagoPendiente.items || [];
+            } catch (e) {
+                items = [];
+            }
+
+            return {
+                id_venta: `pendiente_${pagoPendiente.codigo_pago}`, // ID temporal
+                numero_referencia: pagoPendiente.codigo_pago,
+                fecha_venta: pagoPendiente.createdAt,
+                total_venta: pagoPendiente.monto / 100, // Convertir de centavos
+                estado_venta: 'Pago Pendiente - Efectivo',
+                metodo_pago: 'EFECTIVO',
+                nombre_cliente: datosCliente.nombre || 'Cliente',
+                telefono_cliente: datosCliente.telefono || '',
+                direccion_cliente: datosCliente.direccion || '',
+                ciudad_cliente: datosCliente.ciudad || '',
+                cantidad_productos: Array.isArray(items) ? items.length : 0,
+                codigo_pago: pagoPendiente.codigo_pago,
+                fecha_vencimiento: pagoPendiente.fecha_vencimiento,
+                tipo: 'pago_pendiente' // Para identificar que es un pago pendiente
+            };
+        });
+
+        // 5. Combinar y ordenar todas las compras
+        const todasLasCompras = [...ventasFormateadas, ...pagosPendientesFormateados];
+        todasLasCompras.sort((a, b) => new Date(b.fecha_venta) - new Date(a.fecha_venta));
+
+        res.json({
+            ok: true,
+            ventas: todasLasCompras,
+            total: todasLasCompras.length,
+            resumen: {
+                ventas_confirmadas: ventasFormateadas.length,
+                pagos_pendientes: pagosPendientesFormateados.length
+            }
+        });
+
+    } catch (error) {
+        console.error('Error al obtener las compras del cliente:', error);
+        res.status(500).json({
+            ok: false,
+            msg: 'Error interno del servidor',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Obtiene el detalle de una compra específica del cliente autenticado
+ */
+const getDetalleCompraCliente = async (req = request, res = response) => {
+    try {
+        const { id } = req.params;
+        
+        // Las validaciones de autenticación y rol se manejan en los middlewares
+        const id_usuario = req.usuario.userId;
+
+        // Buscar la venta específica del cliente
+        const venta = await Ventas.findOne({
+            where: { 
+                id_venta: id,
+                id_usuario: id_usuario // Verificar que la venta pertenezca al cliente
+            },
+            include: [
+                {
+                    model: DetalleVenta,
+                    as: 'detalles',
+                    include: [
+                        {
+                            model: Productos,
+                            as: 'producto',
+                            attributes: ['id_producto', 'nombre', 'descripcion', 'foto', 'categoria']
+                        }
+                    ]
+                }
+            ]
+        });
+
+        if (!venta) {
+            return res.status(404).json({
+                ok: false,
+                msg: 'Compra no encontrada o no tienes permisos para verla'
+            });
+        }
+
+        // Formatear el detalle para el frontend
+        const detalleFormateado = {
+            id_venta: venta.id_venta,
+            numero_referencia: venta.numero_referencia,
+            fecha_venta: venta.fecha_venta,
+            total_venta: venta.total_venta,
+            estado_venta: venta.estado_venta,
+            metodo_pago: venta.metodo_pago,
+            nombre_cliente: venta.nombre_cliente,
+            telefono_cliente: venta.telefono_cliente,
+            direccion_cliente: venta.direccion_cliente,
+            ciudad_cliente: venta.ciudad_cliente,
+            notas_cliente: venta.notas_cliente
+        };
+
+        const detallesFormateados = venta.detalles.map(detalle => ({
+            id_detalle_venta: detalle.id_detalle_venta,
+            cantidad: detalle.cantidad,
+            precio_unitario: detalle.precio_unitario,
+            subtotal_linea: detalle.subtotal_linea,
+            producto: detalle.producto
+        }));
+
+        res.json({
+            ok: true,
+            venta: detalleFormateado,
+            detalles: detallesFormateados
+        });
+
+    } catch (error) {
+        console.error('Error al obtener el detalle de la compra:', error);
+        res.status(500).json({
+            ok: false,
+            msg: 'Error interno del servidor',
+            error: error.message
+        });
+    }
+};
+
 // --- Exportar ---
 module.exports = {
     createVenta,
@@ -467,5 +680,7 @@ module.exports = {
     getVentaById,
     confirmDelivery,
     marcarComoEnviada,
-    crearVentaManual
+    crearVentaManual,
+    getMisComprasCliente,
+    getDetalleCompraCliente
 };

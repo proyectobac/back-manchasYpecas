@@ -7,6 +7,16 @@ module.exports = {
       id_venta: {
         allowNull: false, autoIncrement: true, primaryKey: true, type: Sequelize.INTEGER
       },
+      id_usuario: {
+        type: Sequelize.INTEGER,
+        allowNull: true,
+        references: {
+          model: 'usuarios',
+          key: 'id_usuario'
+        },
+        onUpdate: 'CASCADE',
+        onDelete: 'SET NULL'
+      },
       fecha_venta: {
         allowNull: false, type: Sequelize.DATE, defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
       },
@@ -48,8 +58,16 @@ module.exports = {
         allowNull: false, type: Sequelize.DATE, defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
       }
     });
+
+    // Agregar índice para mejorar el rendimiento
+    await queryInterface.addIndex('ventas', ['id_usuario'], {
+      name: 'idx_ventas_id_usuario'
+    });
   },
   async down(queryInterface, Sequelize) {
+    // Eliminar índice primero
+    await queryInterface.removeIndex('ventas', 'idx_ventas_id_usuario');
+    // Luego eliminar la tabla
     await queryInterface.dropTable('ventas');
   }
 };

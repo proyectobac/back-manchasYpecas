@@ -272,7 +272,7 @@ const deleteUsuario = async (req, res = response) => {
 
 const actualizarPerfil = async (req, res) => {
   try {
-    const { nombre, correo, nuevaContrasena } = req.body;
+    const { nombre, apellido, correo, telefono, documento, nuevaContrasena, foto } = req.body;
 
     // Verifica y decodifica el token de autenticación
     const authorizationHeader = req.headers["authorization"];
@@ -297,7 +297,11 @@ const actualizarPerfil = async (req, res) => {
 
     // Actualiza los campos del perfil
     usuario.nombre_usuario = nombre || usuario.nombre_usuario;
+    usuario.apellido = apellido || usuario.apellido;
     usuario.correo = correo || usuario.correo;
+    usuario.telefono = telefono || usuario.telefono;
+    usuario.documento = documento || usuario.documento;
+    usuario.foto = foto || usuario.foto;
 
     // Actualiza la contraseña si se proporciona una nueva
     if (nuevaContrasena) {
@@ -307,6 +311,35 @@ const actualizarPerfil = async (req, res) => {
 
     // Guarda los cambios en la base de datos
     await usuario.save();
+
+    // Si el usuario tiene un empleado asociado, actualizar el empleado también
+    if (usuario.id_empleado) {
+      const empleado = await Empleado.findByPk(usuario.id_empleado);
+      if (empleado) {
+        await empleado.update({
+          nombre: nombre || empleado.nombre,
+          apellido: apellido || empleado.apellido,
+          correo: correo || empleado.correo,
+          documento: documento || empleado.documento,
+          telefono: telefono || empleado.telefono,
+          foto: foto || empleado.foto,
+        });
+      }
+    }
+
+    // Si el usuario tiene un cliente asociado, actualizar el cliente también
+    if (usuario.id_cliente) {
+      const cliente = await Clientes.findByPk(usuario.id_cliente);
+      if (cliente) {
+        await cliente.update({
+          nombre: nombre || cliente.nombre,
+          apellido: apellido || cliente.apellido,
+          correo: correo || cliente.correo,
+          documento: documento || cliente.documento,
+          telefono: telefono || cliente.telefono,
+        });
+      }
+    }
 
     res.json({ mensaje: "Perfil actualizado con éxito" });
   } catch (error) {
@@ -320,6 +353,14 @@ const actualizarPerfil = async (req, res) => {
         return res
           .status(400)
           .json({ mensaje: " P002 - E002 El correo electrónico ya está en uso" });
+      } else if (error.fields.telefono) {
+        return res
+          .status(400)
+          .json({ mensaje: " P002 - E002 El teléfono ya está en uso" });
+      } else if (error.fields.documento) {
+        return res
+          .status(400)
+          .json({ mensaje: " P002 - E002 El documento ya está en uso" });
       }
     }
     res.status(500).json({ mensaje: " P002 - E002 Error al actualizar el perfil" });
@@ -347,6 +388,47 @@ const actualizarEstadoUsuario = async (req, res = response) => {
   }
 };
 
+const uploadFoto = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No se ha proporcionado ninguna imagen' });
+    }
+
+    // La URL de la imagen ya está disponible en req.file.path gracias a Cloudinary
+    const fotoUrl = req.file.path;
+
+    // Verifica y decodifica el token de autenticación
+    const authorizationHeader = req.headers["authorization"];
+    if (!authorizationHeader || !authorizationHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ mensaje: "Token no válido" });
+    }
+
+    const token = authorizationHeader.split(" ")[1];
+    const decodedToken = jwt.verify(token, "secreto-seguro");
+
+    // Busca al usuario por nombre de usuario del token
+    const usuario = await Usuario.findOne({
+      where: { nombre_usuario: decodedToken.nombre_usuario },
+    });
+
+    if (!usuario) {
+      return res.status(404).json({ mensaje: "Usuario no encontrado" });
+    }
+
+    // Actualizar la foto del usuario
+    usuario.foto = fotoUrl;
+    await usuario.save();
+
+    res.json({ 
+      mensaje: "Foto subida exitosamente",
+      fotoUrl: fotoUrl
+    });
+  } catch (error) {
+    console.error("Error al subir foto:", error);
+    res.status(500).json({ mensaje: "Error al subir la foto" });
+  }
+};
+
 module.exports = {
   getUsuario,
   getUsuarios,
@@ -355,4 +437,5 @@ module.exports = {
   deleteUsuario,
   actualizarPerfil,
   actualizarEstadoUsuario,
+  uploadFoto,
 };
